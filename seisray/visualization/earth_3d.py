@@ -311,7 +311,10 @@ class Earth3DVisualizer:
             )
 
         # Set up the scene
-        self.plotter.add_legend()
+        # Only add legend if there are labeled items
+        renderer = self.plotter.renderer
+        if hasattr(renderer, '_labels') and renderer._labels:
+            self.plotter.add_legend()
         self.plotter.show_axes()
         self.plotter.camera.zoom(1.2)
 

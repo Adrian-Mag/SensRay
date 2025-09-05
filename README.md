@@ -1,14 +1,19 @@
 # SeisRay
 
-A Python package for seismic ray tracing and travel time calculations in 1D Earth models.
+A Python package for **ray-theoretical sensitivity kernel computation** and **3D visualization** for seismic tomography.
 
-## Features
+## Overview
 
-- **Travel Time Calculations**: Compute P and S wave travel times using various 1D Earth models
-- **Ray Path Tracing**: Extract and analyze seismic ray paths through the Earth
-- **Earth Model Management**: Work with standard models (iasp91, prem, ak135) and custom models
-- **Visualization**: Create circular Earth cross-sections with ray paths and travel time curves
-- **Sensitivity Kernels**: Compute discretized sensitivity kernels for tomographic applications
+SeisRay focuses on specialized tools for seismic tomography that complement ObsPy:
+
+- **Sensitivity Kernels**: Compute ray-theoretical sensitivity kernels for tomographic inversions
+- **3D Visualization**: Interactive 3D visualization of kernels, ray paths, and Earth structure using PyVista
+- **Tomography Workflows**: Tools specifically designed for tomographic applications
+
+**For basic seismology tasks**, use ObsPy directly:
+- `obspy.taup.TauPyModel` for travel times and ray paths
+- `arrivals.plot_rays()` for excellent 2D visualization
+- ObsPy provides comprehensive coverage of standard seismological analysis
 
 ## Installation
 
@@ -24,45 +29,53 @@ pip install -e ".[dev,notebooks]"
 ## Quick Start
 
 ```python
-from seisray import TravelTimeCalculator, RayPathTracer, EarthPlotter
+from seisray import SensitivityKernel, Earth3DVisualizer
+from obspy.taup import TauPyModel
 
-# Calculate travel times
-calc = TravelTimeCalculator(model='iasp91')
-times = calc.calculate_travel_times(source_depth=10, distance_deg=30)
+# Compute sensitivity kernels for tomography
+domain_bounds = (-500, 500, 0, 1000)  # x_min, x_max, y_min, y_max (km)
+grid_size = (50, 50)  # nx, ny cells
 
-# Extract ray paths
-tracer = RayPathTracer(model='iasp91')
-rays = tracer.get_ray_paths(source_depth=10, distance_deg=30, phase_list=['P', 'S'])
+kernel_calc = SensitivityKernel(
+    domain_bounds=domain_bounds,
+    grid_size=grid_size
+)
 
-# Plot results
-plotter = EarthPlotter()
-plotter.plot_earth_with_rays(rays, source_depth=10)
+# Compute kernel for a source-receiver pair
+kernel = kernel_calc.compute_ray_kernel(
+    source_pos=(0, 200),     # source at (x, y) in km
+    receiver_pos=(300, 50),  # receiver at (x, y) in km
+    ray_type='straight'
+)
+
+# 3D visualization
+viz3d = Earth3DVisualizer()
+# ... create interactive 3D plots
 ```
-
-## Tutorial
-
-See the included Jupyter notebook `ray_tracing_tutorial.ipynb` for a comprehensive tutorial.
 
 ## Demos
 
-There is an interactive 3D demonstration available in `demos/04_3d_plots.ipynb` showcasing
-geographic ray path plotting on a PyVista globe with continent outlines and interactive controls.
+- `demos/01_sensitivity_kernels.ipynb`: Sensitivity kernel computation for tomography
+- `demos/02_3d_visualization.ipynb`: 3D visualization of kernels and ray paths
 
-## Modules
+## Core Modules
 
-- **core.travel_times**: Travel time calculations
-- **core.ray_paths**: Ray path extraction and analysis
-- **core.earth_models**: Earth model management
-- **visualization.earth_plots**: Plotting utilities
-- **kernels.sensitivity**: Sensitivity kernel computation
-- **utils.coordinates**: Coordinate conversion utilities
+- **kernels.sensitivity**: Ray-theoretical sensitivity kernel computation
+- **visualization.earth_3d**: Interactive 3D visualization with PyVista
+
+## Key Applications
+
+1. **Local Earthquake Tomography**: Compute kernels for velocity inversions
+2. **Resolution Assessment**: Visualize ray coverage and model resolution
+3. **Experiment Design**: Plan optimal source-receiver geometries
+4. **Result Visualization**: Interactive 3D exploration of tomographic models
 
 ## Dependencies
 
-- NumPy
-- Matplotlib
-- SciPy
-- ObsPy
+- NumPy, SciPy, Matplotlib
+- **PyVista**: For 3D interactive visualization
+- **ObsPy**: For seismic data processing and ray calculations
+- **Cartopy**: For geographic data (optional)
 
 ## License
 

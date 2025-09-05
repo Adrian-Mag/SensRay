@@ -1,35 +1,30 @@
 """
-SeisRay: A Python package for seismic ray tracing and travel time calculations.
+SeisRay: Sensitivity Kernels and 3D Visualization for Seismic Tomography
 
-This package provides tools for:
-- Computing travel times using 1D Earth models
-- Ray path visualization with circular Earth cross-sections
-- Sensitivity kernel calculations
-- Geographic coordinate handling
-- Model comparisons and analysis
+This package provides specialized tools for ray-theoretical seismic tomography:
+- Ray-theoretical sensitivity kernel computation for tomographic inversions
+- Interactive 3D visualization of kernels, ray paths, and Earth structure
+- Integration with ObsPy for seismic data processing
+
+For basic seismic analysis, use ObsPy directly:
+- obspy.taup.TauPyModel for travel times and ray paths
+- arrivals.plot_rays() for 2D ray path visualization
+- ObsPy has excellent coverage of standard seismological tasks
+
+SeisRay focuses on advanced tomography applications and 3D visualization.
 
 Authors: PhD Project
-Version: 0.1.0
+Version: 0.2.0
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __author__ = "PhD Project"
 
-# Import main classes and functions for easy access
-from .core.travel_times import TravelTimeCalculator
-from .core.ray_paths import RayPathTracer
-from .core.earth_models import EarthModelManager
-from .visualization.earth_plots import EarthPlotter
+# Import unique functionality only
 from .visualization.earth_3d import Earth3DVisualizer
 from .kernels.sensitivity import SensitivityKernel
-from .utils.coordinates import CoordinateConverter
 
 __all__ = [
-    'TravelTimeCalculator',
-    'RayPathTracer',
-    'EarthModelManager',
-    'EarthPlotter',
     'Earth3DVisualizer',
-    'SensitivityKernel',
-    'CoordinateConverter'
+    'SensitivityKernel'
 ]
