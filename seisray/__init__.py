@@ -20,6 +20,7 @@ from .core.travel_times import TravelTimeCalculator
 from .core.ray_paths import RayPathTracer
 from .core.earth_models import EarthModelManager
 from .visualization.earth_plots import EarthPlotter
+from .visualization.earth_3d import Earth3DVisualizer
 from .kernels.sensitivity import SensitivityKernel
 from .utils.coordinates import CoordinateConverter
 
@@ -28,6 +29,7 @@ __all__ = [
     'RayPathTracer',
     'EarthModelManager',
     'EarthPlotter',
+    'Earth3DVisualizer',
     'SensitivityKernel',
     'CoordinateConverter'
 ]

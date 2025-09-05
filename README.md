@@ -43,6 +43,11 @@ plotter.plot_earth_with_rays(rays, source_depth=10)
 
 See the included Jupyter notebook `ray_tracing_tutorial.ipynb` for a comprehensive tutorial.
 
+## Demos
+
+There is an interactive 3D demonstration available in `demos/04_3d_plots.ipynb` showcasing
+geographic ray path plotting on a PyVista globe with continent outlines and interactive controls.
+
 ## Modules
 
 - **core.travel_times**: Travel time calculations

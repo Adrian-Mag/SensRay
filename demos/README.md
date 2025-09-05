@@ -28,6 +28,17 @@ This folder contains Jupyter notebook demonstrations showing various application
 - Understanding ray path curvature and geometry
 - Visualization techniques for seismic ray propagation
 
+### 04_3d_plots.ipynb
+**3D Interactive Visualization**
+- Interactive 3D globe visualizations using PyVista
+- Geographic ray paths and continent outlines
+- Interactive exploration and exportable views
+
+**Key Learning Points:**
+- Using `Earth3DVisualizer` for 3D ray plotting
+- Converting geographic ray paths to 3D Cartesian coordinates
+- Styling and interactive inspection of ray geometries
+
 ### 03_earth_model_comparison.ipynb
 **Earth Model Comparison**
 - Compare velocity structures of different 1D Earth models
