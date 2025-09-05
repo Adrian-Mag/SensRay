@@ -83,10 +83,20 @@ class Earth3DVisualizer:
             3D ray path coordinates for each phase
         """
         ray_paths_3d = {}
+        phase_counters = {}  # Track how many rays of each phase we've seen
 
         for rp in ray_paths_geo:
             if not hasattr(rp, 'path') or rp.path is None:
                 continue
+
+            # Create unique key for each ray path
+            phase_name = rp.name
+            if phase_name not in phase_counters:
+                phase_counters[phase_name] = 0
+            phase_counters[phase_name] += 1
+
+            # Create unique key: "P_1", "P_2", "PP_1", "PP_2", etc.
+            unique_key = f"{phase_name}_{phase_counters[phase_name]}"
 
             # Extract path data
             path = rp.path
@@ -105,14 +115,15 @@ class Earth3DVisualizer:
                 y_coords.append(y)
                 z_coords.append(z)
 
-            ray_paths_3d[rp.name] = {
+            ray_paths_3d[unique_key] = {
                 'x': np.array(x_coords),
                 'y': np.array(y_coords),
                 'z': np.array(z_coords),
                 'lats': np.array(lats),
                 'lons': np.array(lons),
                 'depths': np.array(depths),
-                'travel_time': rp.time
+                'travel_time': rp.time,
+                'phase_name': phase_name  # Keep original phase name
             }
 
         return ray_paths_3d
@@ -199,15 +210,31 @@ class Earth3DVisualizer:
             earth = self.create_earth_sphere()
             self.plotter.add_mesh(earth, color='lightblue', opacity=0.6)
 
-        # Default colors for ray paths
+        # Default colors for ray paths based on phase types
         if ray_colors is None:
             ray_colors = {}
             color_cycle = ['red', 'blue', 'green', 'orange', 'purple', 'brown']
-            for i, phase in enumerate(ray_paths_3d.keys()):
+            # Get unique phase names for coloring
+            unique_phases = set()
+            for unique_key, coords_3d in ray_paths_3d.items():
+                if 'phase_name' in coords_3d:
+                    unique_phases.add(coords_3d['phase_name'])
+                else:
+                    # Backward compatibility: extract phase from key
+                    unique_phases.add(unique_key.split('_')[0])
+
+            for i, phase in enumerate(sorted(unique_phases)):
                 ray_colors[phase] = color_cycle[i % len(color_cycle)]
 
         # Add ray paths
-        for phase_name, coords_3d in ray_paths_3d.items():
+        for unique_key, coords_3d in ray_paths_3d.items():
+            # Determine the base phase name for coloring
+            if 'phase_name' in coords_3d:
+                base_phase = coords_3d['phase_name']
+            else:
+                # Backward compatibility: extract phase from key
+                base_phase = unique_key.split('_')[0]
+
             # Create line/tube for ray path
             points = np.column_stack([
                 coords_3d['x'],
@@ -219,10 +246,10 @@ class Earth3DVisualizer:
             spline = pv.Spline(points, n_points=len(points)*2)
 
             # Add to plot
-            color = ray_colors.get(phase_name, 'red')
+            color = ray_colors.get(base_phase, 'red')
             self.plotter.add_mesh(
                 spline, color=color, line_width=3,
-                label=f"{phase_name} ({coords_3d['travel_time']:.1f}s)"
+                label=f"{unique_key} ({coords_3d['travel_time']:.1f}s)"
             )
 
         # Add source point
