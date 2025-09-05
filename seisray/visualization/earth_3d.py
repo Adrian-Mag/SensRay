@@ -1,14 +1,17 @@
 """
-3D interactive Earth visualization using PyVista for seismic ray paths and Earth structure.
-Supports ray paths, meshes, and volumetric property visualization.
+3D interactive Earth visualization using PyVista.
+
+Features include seismic ray paths, Earth structure, meshes, and
+volumetric property visualization.
 """
 
 import numpy as np
 import pyvista as pv
 from typing import Dict, List, Tuple, Optional, Union
-from obspy import geodetics
-import matplotlib.cm as cm
-import matplotlib.colors as colors
+try:
+    import cartopy.io.shapereader as shpreader  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    shpreader = None
 
 
 class Earth3DVisualizer:
@@ -129,7 +132,7 @@ class Earth3DVisualizer:
         return ray_paths_3d
 
     def create_earth_sphere(self, resolution: int = 50,
-                          show_continents: bool = True) -> pv.PolyData:
+                            show_continents: bool = False) -> pv.PolyData:
         """
         Create a 3D Earth sphere mesh.
 
@@ -138,7 +141,8 @@ class Earth3DVisualizer:
         resolution : int
             Sphere resolution (default: 50)
         show_continents : bool
-            Whether to add continent textures/outlines
+            Deprecated here. Use `show_continents` in
+            `plot_3d_earth_and_rays` to draw continent outlines.
 
         Returns
         -------
@@ -146,41 +150,57 @@ class Earth3DVisualizer:
             PyVista mesh of Earth sphere
         """
         # Create sphere
-        sphere = pv.Sphere(radius=self.earth_radius,
-                          theta_resolution=resolution,
-                          phi_resolution=resolution)
-
-        if show_continents:
-            # Add basic continent coloring (simplified)
-            # In future versions, could add actual Earth textures
-            pass
+        sphere = pv.Sphere(
+            radius=self.earth_radius,
+            theta_resolution=resolution,
+            phi_resolution=resolution,
+        )
 
         return sphere
 
-    def plot_3d_earth_and_rays(self, ray_paths,
-                              source_lat: float, source_lon: float,
-                              source_depth: float,
-                              receiver_lat: float, receiver_lon: float,
-                              show_earth: bool = True,
-                              ray_colors: Optional[Dict] = None,
-                              notebook: bool = True) -> pv.Plotter:
+    def plot_3d_earth_and_rays(
+        self,
+        ray_paths,
+        source_lat: float,
+        source_lon: float,
+        source_depth: float,
+        receiver_lat: float,
+        receiver_lon: float,
+        show_earth: bool = True,
+        show_continents: bool = False,
+        ray_colors: Optional[Dict] = None,
+        notebook: bool = True,
+        show_endpoints: bool = True,
+        ray_line_width: float = 2.0,
+        continents_line_width: float = 0.8,
+    ) -> pv.Plotter:
         """
         Create interactive 3D plot of Earth and ray paths.
 
         Parameters
         ----------
         ray_paths : List or Dict
-            Either ObsPy ray paths (geographic) or pre-converted 3D coordinates dict
+            Either ObsPy ray paths (geographic) or pre-converted 3D
+            coordinates dict
         source_lat, source_lon, source_depth : float
             Source coordinates
         receiver_lat, receiver_lon : float
             Receiver coordinates
         show_earth : bool
             Whether to show Earth sphere
+        show_continents : bool
+            If True and cartopy is available, draw continent outlines on the
+            sphere surface using Natural Earth coastlines.
         ray_colors : Dict, optional
             Custom colors for each phase
         notebook : bool
             Whether running in Jupyter notebook
+        show_endpoints : bool
+            If True, draw source/receiver markers. If False, hide them.
+        ray_line_width : float
+            Line width for ray paths.
+        continents_line_width : float
+            Line width for continent outlines.
 
         Returns
         -------
@@ -209,6 +229,15 @@ class Earth3DVisualizer:
         if show_earth:
             earth = self.create_earth_sphere()
             self.plotter.add_mesh(earth, color='lightblue', opacity=0.6)
+
+            # Optionally add continent outlines
+            if show_continents:
+                self._add_continent_outlines(
+                    color="white",
+                    line_width=continents_line_width,
+                    opacity=0.9,
+                    resolution='110m',
+                )
 
         # Default colors for ray paths based on phase types
         if ray_colors is None:
@@ -248,27 +277,38 @@ class Earth3DVisualizer:
             # Add to plot
             color = ray_colors.get(base_phase, 'red')
             self.plotter.add_mesh(
-                spline, color=color, line_width=3,
+                spline,
+                color=color,
+                line_width=ray_line_width,
+                style='wireframe',
+                render_points_as_spheres=False,
+                point_size=0.1,
                 label=f"{unique_key} ({coords_3d['travel_time']:.1f}s)"
             )
 
-        # Add source point
-        source_x, source_y, source_z = self.lat_lon_depth_to_cartesian(
-            source_lat, source_lon, source_depth)
-        source_center = [source_x, source_y, source_z]
-        self.plotter.add_mesh(
-            pv.Sphere(radius=50, center=source_center),
-            color='red', label='Source'
-        )
+        if show_endpoints:
+            # Add source point
+            source_x, source_y, source_z = self.lat_lon_depth_to_cartesian(
+                source_lat, source_lon, source_depth
+            )
+            source_center = [source_x, source_y, source_z]
+            self.plotter.add_mesh(
+                pv.Sphere(radius=50, center=source_center),
+                color='red',
+                label='Source',
+            )
 
-        # Add receiver point
-        receiver_x, receiver_y, receiver_z = self.lat_lon_depth_to_cartesian(
-            receiver_lat, receiver_lon, 0)
-        receiver_center = [receiver_x, receiver_y, receiver_z]
-        self.plotter.add_mesh(
-            pv.Sphere(radius=50, center=receiver_center),
-            color='blue', label='Receiver'
-        )
+            # Add receiver point
+            receiver_x, receiver_y, receiver_z = \
+                self.lat_lon_depth_to_cartesian(
+                    receiver_lat, receiver_lon, 0
+                )
+            receiver_center = [receiver_x, receiver_y, receiver_z]
+            self.plotter.add_mesh(
+                pv.Sphere(radius=50, center=receiver_center),
+                color='blue',
+                label='Receiver',
+            )
 
         # Set up the scene
         self.plotter.add_legend()
@@ -277,9 +317,93 @@ class Earth3DVisualizer:
 
         return self.plotter
 
-    def add_velocity_structure(self, model_data: Dict,
-                             property_name: str = 'vp',
-                             depth_slice: Optional[float] = None):
+    def _add_continent_outlines(
+        self,
+        color: Union[str, Tuple[float, float, float]] = "white",
+        line_width: float = 1.0,
+        opacity: float = 0.9,
+        resolution: str = '110m',
+    ) -> None:
+        """
+        Add continent coastlines as polylines on the Earth sphere.
+
+        This uses cartopy's Natural Earth coastline dataset if available.
+        If cartopy is not installed, this becomes a no-op.
+
+        Parameters
+        ----------
+        color : str or 3-tuple
+            Line color for the coastlines.
+        line_width : float
+            Line width for the coastlines.
+        opacity : float
+            Line opacity for the coastlines.
+        resolution : str
+            Natural Earth resolution: one of '110m', '50m', or '10m'.
+        """
+        if self.plotter is None:
+            return
+        if shpreader is None:  # cartopy not available
+            return
+
+        try:
+            shpfile = shpreader.natural_earth(
+                resolution=resolution,
+                category='physical',
+                name='coastline',
+            )
+            reader = shpreader.Reader(shpfile)
+        except Exception:
+            return
+
+        for rec in reader.records():
+            geom = rec.geometry
+            # Handle LineString and MultiLineString
+            geoms = []
+            gtype = getattr(geom, 'geom_type', '')
+            if gtype == 'LineString':
+                geoms = [geom]
+            elif gtype == 'MultiLineString':
+                geoms = list(getattr(geom, 'geoms', []))
+            else:
+                continue
+
+            for line in geoms:
+                coords = list(getattr(line, 'coords', []))
+                if len(coords) < 2:
+                    continue
+
+                # Convert (lon, lat) to 3D points on the sphere surface
+                pts = []
+                for lon, lat in coords:
+                    x, y, z = self.lat_lon_depth_to_cartesian(lat, lon, 0.0)
+                    pts.append([x, y, z])
+
+                if len(pts) < 2:
+                    continue
+
+                points = np.asarray(pts, dtype=float)
+                npts = points.shape[0]
+                # VTK polyline connectivity: [N, 0, 1, ..., N-1]
+                poly = pv.PolyData(points)
+                poly.lines = np.hstack((np.array([npts]),
+                                        np.arange(npts, dtype=np.int64)))
+                self.plotter.add_mesh(
+                    poly,
+                    color=color,
+                    line_width=line_width,
+                    opacity=opacity,
+                    style='wireframe',
+                    render_points_as_spheres=False,
+                    point_size=0.1,
+                )
+
+    def add_velocity_structure(
+        self,
+        model_data: Dict,
+        property_name: str = 'vp',
+        depth_slice: Optional[float] = None,
+    ):
         """
         Add velocity or density structure visualization.
 
@@ -296,8 +420,12 @@ class Earth3DVisualizer:
         # This will be expanded based on your Earth model format
         pass
 
-    def add_mesh_overlay(self, mesh_data: Union[pv.PolyData, str],
-                        color: str = 'yellow', opacity: float = 0.7):
+    def add_mesh_overlay(
+        self,
+        mesh_data: Union[pv.PolyData, str],
+        color: str = 'yellow',
+        opacity: float = 0.7,
+    ):
         """
         Add custom mesh overlay (for your future mesh visualizations).
 
