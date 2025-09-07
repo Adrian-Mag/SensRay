@@ -247,9 +247,9 @@ class EarthPlotter:
         )
         mid = angle / 2.0
         ax.text(
-            (earth_radius + 300.0) * np.cos(mid),
-            (earth_radius + 300.0) * np.sin(mid),
-            f"{distance_deg}°",
+            (earth_radius + 500.0) * np.cos(mid),
+            (earth_radius + 500.0) * np.sin(mid),
+            f"{distance_deg:.1f}°",
             fontsize=14,
             ha="center",
             va="center",
