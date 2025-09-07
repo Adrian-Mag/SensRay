@@ -24,7 +24,16 @@ __author__ = "PhD Project"
 from .visualization.earth_3d import Earth3DVisualizer
 from .kernels.sensitivity import SensitivityKernel
 
+# Core API convenience exports
+from .core.travel_times import TravelTimeCalculator
+from .core.earth_models import EarthModelManager
+from .core.ray_paths import RayPathTracer
+from .visualization.earth_plots import EarthPlotter
+
 __all__ = [
     'Earth3DVisualizer',
-    'SensitivityKernel'
+    'SensitivityKernel',
+    'TravelTimeCalculator',
+    'EarthModelManager'
+    , 'RayPathTracer', 'EarthPlotter'
 ]
