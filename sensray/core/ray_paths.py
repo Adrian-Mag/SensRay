@@ -26,15 +26,17 @@ class RayPathTracer:
         self.model_name = model_name
         self.model = TauPyModel(model=model_name)
 
-    def get_ray_paths(self,
-                               source_lat: Optional[float] = None,
-                               source_lon: Optional[float] = None,
-                               source_depth: float = 0.0,
-                               receiver_lat: Optional[float] = None,
-                               receiver_lon: Optional[float] = None,
-                               distance_deg: Optional[float] = None,
-                               phases: List[str] = ["P", "S"],
-                               output_geographic: bool = True) -> Tuple[List, Dict]:
+    def get_ray_paths(
+        self,
+        source_lat: Optional[float] = None,
+        source_lon: Optional[float] = None,
+        source_depth: float = 0.0,
+        receiver_lat: Optional[float] = None,
+        receiver_lon: Optional[float] = None,
+        distance_deg: Optional[float] = None,
+        phases: List[str] = ["P", "S"],
+        output_geographic: bool = True
+    ) -> Tuple[List, Dict]:
         """
         Flexible ray path calculation supporting both geographic and
         distance-based input.
