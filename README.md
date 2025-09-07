@@ -1,19 +1,19 @@
-# SeisRay
+# SensRay
 
-A Python package for **ray-theoretical sensitivity kernel computation** and **3D visualization** for seismic tomography.
+A Python package for **seismic ray tracing**, **travel time calculations**, and **3D visualization** for seismological research.
 
 ## Overview
 
-SeisRay focuses on specialized tools for seismic tomography that complement ObsPy:
+SensRay provides modern tools for seismic ray path analysis and Earth model studies:
 
-- **Sensitivity Kernels**: Compute ray-theoretical sensitivity kernels for tomographic inversions
-- **3D Visualization**: Interactive 3D visualization of kernels, ray paths, and Earth structure using PyVista
-- **Tomography Workflows**: Tools specifically designed for tomographic applications
+- **Travel Time Calculations**: Fast, accurate travel time computations for P and S waves
+- **Ray Path Tracing**: Extract and analyze seismic ray paths with geographic coordinates
+- **Earth Model Comparison**: Compare velocity structures between IASP91, PREM, and AK135
+- **2D Visualization**: Circular Earth cross-sections with professional ray path plotting
+- **3D Visualization**: Interactive 3D visualization using PyVista for publication-quality graphics
+- **Model Analysis**: Statistical comparison and validation of Earth models
 
-**For basic seismology tasks**, use ObsPy directly:
-- `obspy.taup.TauPyModel` for travel times and ray paths
-- `arrivals.plot_rays()` for excellent 2D visualization
-- ObsPy provides comprehensive coverage of standard seismological analysis
+Built on **ObsPy** foundation with enhanced visualization and analysis capabilities.
 
 ## Installation
 
@@ -29,46 +29,69 @@ pip install -e ".[dev,notebooks]"
 ## Quick Start
 
 ```python
-from seisray import SensitivityKernel, Earth3DVisualizer
-from obspy.taup import TauPyModel
+from sensray import TravelTimeCalculator, RayPathTracer, EarthPlotter
+import matplotlib.pyplot as plt
 
-# Compute sensitivity kernels for tomography
-domain_bounds = (-500, 500, 0, 1000)  # x_min, x_max, y_min, y_max (km)
-grid_size = (50, 50)  # nx, ny cells
-
-kernel_calc = SensitivityKernel(
-    domain_bounds=domain_bounds,
-    grid_size=grid_size
+# Calculate travel times for different phases
+calc = TravelTimeCalculator('iasp91')
+arrivals = calc.calculate_travel_times(
+    source_depth=10,  # km
+    distance=60       # degrees
 )
 
-# Compute kernel for a source-receiver pair
-kernel = kernel_calc.compute_ray_kernel(
-    source_pos=(0, 200),     # source at (x, y) in km
-    receiver_pos=(300, 50),  # receiver at (x, y) in km
-    ray_type='straight'
+print(f"Found {len(arrivals)} seismic phases")
+for arrival in arrivals:
+    print(f"{arrival.name}: {arrival.time:.1f} seconds")
+
+# Extract and visualize ray paths
+tracer = RayPathTracer('prem')
+ray_paths, info = tracer.get_ray_paths(
+    source_depth=10,
+    distance_deg=60,
+    phases=['P', 'S', 'PP']
 )
 
-# 3D visualization
-viz3d = Earth3DVisualizer()
-# ... create interactive 3D plots
+# Create publication-quality 2D visualization
+plotter = EarthPlotter()
+ray_coordinates = tracer.extract_ray_coordinates(ray_paths)
+
+fig = plotter.plot_circular_earth(
+    ray_coordinates=ray_coordinates,
+    source_depth=10,
+    distance_deg=60,
+    fig_size=(10, 10)
+)
+plt.show()
 ```
 
 ## Demos
 
-- `demos/01_sensitivity_kernels.ipynb`: Sensitivity kernel computation for tomography
-- `demos/02_3d_visualization.ipynb`: 3D visualization of kernels and ray paths
+Explore the package capabilities through interactive Jupyter notebooks:
+
+- **[01_basic_travel_times.ipynb](demos/01_basic_travel_times.ipynb)**: Start here! Learn travel time calculations and Earth models
+- **[02_ray_path_visualization.ipynb](demos/02_ray_path_visualization.ipynb)**: Extract and visualize ray paths in 2D cross-sections
+- **[03_earth_model_comparison.ipynb](demos/03_earth_model_comparison.ipynb)**: Compare IASP91, PREM, and AK135 models with statistical analysis
+- **[04_3d_plots.ipynb](demos/04_3d_plots.ipynb)**: Interactive 3D visualization with PyVista
+
+Run the demos: `jupyter notebook demos/00_index.ipynb`
 
 ## Core Modules
 
-- **kernels.sensitivity**: Ray-theoretical sensitivity kernel computation
+- **core.travel_times**: Travel time calculation with multiple Earth models
+- **core.ray_paths**: Ray path extraction with geographic coordinate support
+- **core.earth_models**: Earth model management and 1D profile visualization
+- **visualization.earth_plots**: Circular Earth cross-sections and ray plotting
 - **visualization.earth_3d**: Interactive 3D visualization with PyVista
+- **kernels.sensitivity**: Ray-theoretical sensitivity kernel computation
 
 ## Key Applications
 
-1. **Local Earthquake Tomography**: Compute kernels for velocity inversions
-2. **Resolution Assessment**: Visualize ray coverage and model resolution
-3. **Experiment Design**: Plan optimal source-receiver geometries
-4. **Result Visualization**: Interactive 3D exploration of tomographic models
+1. **Seismic Phase Analysis**: Identify and analyze P, S, PP, SS, and other seismic phases
+2. **Earth Model Studies**: Compare velocity structures and understand model limitations
+3. **Ray Path Analysis**: Study wave propagation paths through Earth's interior
+4. **Educational Tools**: Teach seismology concepts with interactive visualizations
+5. **Research Applications**: Support earthquake location, velocity structure studies
+6. **Quality Control**: Validate seismic data and model predictions
 
 ## Dependencies
 

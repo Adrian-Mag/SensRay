@@ -1,23 +1,27 @@
 """
-SeisRay: Sensitivity Kernels and 3D Visualization for Seismic Tomography
+SensRay: Seismic Ray Tracing, Travel Times, and 3D Visualization
 
-This package provides specialized tools for ray-theoretical seismic tomography:
-- Ray-theoretical sensitivity kernel computation for tomographic inversions
-- Interactive 3D visualization of kernels, ray paths, and Earth structure
-- Integration with ObsPy for seismic data processing
+This package provides comprehensive tools for seismic ray path analysis:
+- Travel time calculations for P, S, and other seismic phases
+- Ray path extraction and coordinate conversion
+- Earth model comparison (IASP91, PREM, AK135)
+- 2D circular Earth cross-section visualization
+- Interactive 3D visualization with PyVista
+- Statistical analysis of model differences
 
-For basic seismic analysis, use ObsPy directly:
-- obspy.taup.TauPyModel for travel times and ray paths
-- arrivals.plot_rays() for 2D ray path visualization
-- ObsPy has excellent coverage of standard seismological tasks
-
-SeisRay focuses on advanced tomography applications and 3D visualization.
+Key Classes:
+- TravelTimeCalculator: Compute travel times for seismic phases
+- RayPathTracer: Extract and analyze ray paths with geographic coordinates
+- EarthModelManager: Manage Earth models and plot velocity profiles
+- EarthPlotter: Create publication-quality 2D ray path visualizations
+- Earth3DVisualizer: Interactive 3D visualization
+- SensitivityKernel: Ray-theoretical sensitivity kernels for tomography
 
 Authors: PhD Project
-Version: 0.2.0
+Version: 0.3.0
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 __author__ = "PhD Project"
 
 # Import unique functionality only
@@ -34,6 +38,7 @@ __all__ = [
     'Earth3DVisualizer',
     'SensitivityKernel',
     'TravelTimeCalculator',
-    'EarthModelManager'
-    , 'RayPathTracer', 'EarthPlotter'
+    'EarthModelManager',
+    'RayPathTracer',
+    'EarthPlotter'
 ]
