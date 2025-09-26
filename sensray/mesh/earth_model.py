@@ -344,7 +344,11 @@ class MeshEarthModel:
             show_edges=show_edges,
             opacity=opacity,
             nan_opacity=nan_opacity,
+            show_scalar_bar=False,
         )
+        # Add the scalar bar now so it's linked to the scalar-mapped surface,
+        # not the later wireframe actor (which would yield a 0–1 default).
+        plotter.add_scalar_bar(title=scalar_name)  # type: ignore[attr-defined]
         if show_wireframe:
             plotter.add_mesh(
                 surface,
@@ -353,7 +357,6 @@ class MeshEarthModel:
                 line_width=wireframe_line_width,
                 opacity=1.0,
             )
-        plotter.add_scalar_bar(title=scalar_name)  # type: ignore[attr-defined]
         return plotter
 
     # ----- High-level plotting helpers -------------------------------------
