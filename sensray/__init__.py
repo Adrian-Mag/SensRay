@@ -26,6 +26,7 @@ __author__ = "PhD Project"
 
 # Import unique functionality only
 from .visualization.earth_3d import Earth3DVisualizer
+from .mesh.earth_model import MeshEarthModel
 from .kernels.sensitivity import SensitivityKernel
 
 # Core API convenience exports
@@ -36,9 +37,10 @@ from .visualization.earth_plots import EarthPlotter
 
 __all__ = [
     'Earth3DVisualizer',
+    'MeshEarthModel',
     'SensitivityKernel',
     'TravelTimeCalculator',
     'EarthModelManager',
     'RayPathTracer',
-    'EarthPlotter'
+    'EarthPlotter',
 ]

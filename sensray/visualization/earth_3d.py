@@ -6,8 +6,15 @@ volumetric property visualization.
 """
 
 import numpy as np
-import pyvista as pv
 from typing import Dict, List, Tuple, Optional, Union
+
+try:
+    import pyvista as pv
+    HAS_PYVISTA = True
+except ImportError:
+    HAS_PYVISTA = False
+    pv = None
+
 try:
     import cartopy.io.shapereader as shpreader  # type: ignore
 except Exception:  # pragma: no cover - optional dependency
@@ -19,24 +26,31 @@ class Earth3DVisualizer:
     Interactive 3D visualization of Earth structure and seismic ray paths.
 
     Features:
-    - 3D ray path visualization with geographic coordinates
-    - Earth sphere with continental outlines
-    - Interior structure visualization (velocity, density)
-    - Mesh overlay capabilities
-    - Interactive controls
+    - Spherical Earth model visualization
+    - Seismic ray path plotting
+    - Velocity structure display
+    - Interactive controls and camera manipulation
+    - Export to static images or animations
     """
 
-    def __init__(self, earth_radius_km: float = 6371.0):
+    def __init__(self, earth_radius: float = 6371.0):
         """
         Initialize the 3D Earth visualizer.
 
         Parameters
         ----------
-        earth_radius_km : float
-            Earth radius in kilometers (default: 6371.0)
+        earth_radius : float
+            Earth radius in km (default: 6371.0)
         """
-        self.earth_radius = earth_radius_km
+        if not HAS_PYVISTA:
+            raise ImportError(
+                "PyVista is required for 3D visualization. "
+                "Install with: pip install pyvista"
+            )
+
+        self.earth_radius = earth_radius
         self.plotter = None
+        self.meshes = {}  # Store added mesh objects
 
     def lat_lon_depth_to_cartesian(self, lat: float, lon: float,
                                    depth: float) -> Tuple[float, float, float]:

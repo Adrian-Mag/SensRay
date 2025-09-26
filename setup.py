@@ -35,7 +35,6 @@ setup(
         "matplotlib>=3.3.0",
         "scipy>=1.7.0",
         "obspy>=1.3.0",
-        "pyvista>=0.40.0",
     ],
     extras_require={
         "dev": [
@@ -52,6 +51,11 @@ setup(
         "geographic": [
             "cartopy>=0.20.0",
         ],
+        "meshing": [
+            "pyvista>=0.40.0",
+            "meshio>=5.0.0",
+            "pygmsh>=7.1.17",
+        ],
         "all": [
             "pytest>=6.0",
             "black",
@@ -61,6 +65,9 @@ setup(
             "ipython",
             "ipywidgets",
             "cartopy>=0.20.0",
+            "pyvista>=0.40.0",
+            "meshio>=5.0.0",
+            "pygmsh>=7.1.17",
         ],
     },
     keywords="seismology, ray-tracing, travel-times, earth-models",
