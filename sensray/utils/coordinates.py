@@ -13,8 +13,12 @@ class CoordinateConverter:
     """
 
     @staticmethod
-    def geographic_to_distance(eq_lat: float, eq_lon: float,
-                              sta_lat: float, sta_lon: float) -> Tuple[float, float, float]:
+    def geographic_to_distance(
+        eq_lat: float,
+        eq_lon: float,
+        sta_lat: float,
+        sta_lon: float,
+    ) -> Tuple[float, float, float]:
         """
         Convert geographic coordinates to distance and azimuth.
 
@@ -34,14 +38,22 @@ class CoordinateConverter:
         azimuth : float
             Azimuth in degrees
         """
-        distance_m, azimuth, _ = gps2dist_azimuth(eq_lat, eq_lon, sta_lat, sta_lon)
+        distance_m, azimuth, _ = gps2dist_azimuth(
+            eq_lat, eq_lon, sta_lat, sta_lon
+        )
         distance_km = distance_m / 1000.0
-        distance_deg = locations2degrees(eq_lat, eq_lon, sta_lat, sta_lon)
+        # Cast to float in case the library returns a numpy scalar/ndarray
+        distance_deg = float(
+            locations2degrees(eq_lat, eq_lon, sta_lat, sta_lon)
+        )
 
         return distance_km, distance_deg, azimuth
 
     @staticmethod
-    def degrees_to_km(distance_deg: float, earth_radius: float = 6371.0) -> float:
+    def degrees_to_km(
+        distance_deg: float,
+        earth_radius: float = 6371.0,
+    ) -> float:
         """
         Convert distance from degrees to kilometers.
 
@@ -60,7 +72,10 @@ class CoordinateConverter:
         return distance_deg * np.pi * earth_radius / 180.0
 
     @staticmethod
-    def km_to_degrees(distance_km: float, earth_radius: float = 6371.0) -> float:
+    def km_to_degrees(
+        distance_km: float,
+        earth_radius: float = 6371.0,
+    ) -> float:
         """
         Convert distance from kilometers to degrees.
 
@@ -79,7 +94,10 @@ class CoordinateConverter:
         return distance_km * 180.0 / (np.pi * earth_radius)
 
     @staticmethod
-    def cartesian_to_polar(x: np.ndarray, y: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def cartesian_to_polar(
+        x: np.ndarray,
+        y: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Convert Cartesian coordinates to polar.
 
@@ -98,7 +116,10 @@ class CoordinateConverter:
         return r, theta
 
     @staticmethod
-    def polar_to_cartesian(r: np.ndarray, theta: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def polar_to_cartesian(
+        r: np.ndarray,
+        theta: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Convert polar coordinates to Cartesian.
 
@@ -117,8 +138,12 @@ class CoordinateConverter:
         return x, y
 
     @staticmethod
-    def create_station_array(center_lat: float, center_lon: float,
-                           radius_km: float, n_stations: int) -> List[Tuple[float, float]]:
+    def create_station_array(
+        center_lat: float,
+        center_lon: float,
+        radius_km: float,
+        n_stations: int,
+    ) -> List[Tuple[float, float]]:
         """
         Create a circular array of stations around a center point.
 
@@ -145,7 +170,11 @@ class CoordinateConverter:
 
             # Approximate offset in lat/lon
             lat_offset = radius_deg * np.cos(angle)
-            lon_offset = radius_deg * np.sin(angle) / np.cos(np.radians(center_lat))
+            lon_offset = (
+                radius_deg
+                * np.sin(angle)
+                / np.cos(np.radians(center_lat))
+            )
 
             station_lat = center_lat + lat_offset
             station_lon = center_lon + lon_offset
@@ -155,8 +184,12 @@ class CoordinateConverter:
         return stations
 
     @staticmethod
-    def earth_to_cartesian(lat: float, lon: float, depth: float,
-                          earth_radius: float = 6371.0) -> Tuple[float, float, float]:
+    def earth_to_cartesian(
+        lat: float,
+        lon: float,
+        depth: float,
+        earth_radius: float = 6371.0,
+    ) -> Tuple[float, float, float]:
         """
         Convert Earth coordinates to 3D Cartesian.
 
