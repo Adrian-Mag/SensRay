@@ -259,6 +259,258 @@ class MeshEarthModel:
             "Points must have shape (N,3) or (3,N) or flat 1D of 3N"
         )
 
+    # ----- 1D model mapping -------------------------------------------------
+    def _depths_from_points(self, pts: np.ndarray) -> np.ndarray:
+        """Compute depth (km) from Cartesian points using model radius."""
+        r = np.linalg.norm(pts, axis=1)
+        return self.radius_km - r
+
+    def _cell_centers_points(self) -> np.ndarray:
+        """Return (n_cells, 3) array of cell centers (km)."""
+        return self.mesh.cell_centers().points  # type: ignore[attr-defined]
+
+    def _sample_1d_property_at_depths(
+        self,
+        model_name: str,
+        property_name: str,
+        depths_km: np.ndarray,
+        max_depth_km: Optional[float] = None,
+    ) -> np.ndarray:
+        """Sample a TauP 1D property at given depths via linear interp."""
+        from sensray.core.earth_models import EarthModelManager
+
+        mgr = EarthModelManager()
+        prof = mgr.get_1d_profile(
+            model_name, properties=[property_name], max_depth_km=max_depth_km
+        )
+        d = np.asarray(prof["depth_km"], dtype=float)
+        v = np.asarray(prof[property_name], dtype=float)
+        # Clamp depths to profile bounds
+        depths = np.asarray(depths_km, dtype=float)
+        depths = np.clip(depths, float(np.nanmin(d)), float(np.nanmax(d)))
+        return np.interp(depths, d, v)
+
+    def add_scalar_from_1d_model(
+        self,
+        model_name: str,
+        property_name: str,
+        where: str = "cell",
+        method: str = "center",
+        max_depth_km: Optional[float] = None,
+    ) -> np.ndarray:
+        """Attach a scalar from a TauP 1D Earth model onto this mesh.
+
+        Parameters
+        ----------
+        model_name : str
+            TauP model name (e.g., 'prem', 'iasp91', 'ak135').
+        property_name : str
+            One of 'vp','vs','rho','density','qp','qs'.
+        where : str
+            'cell' (default) or 'point' to choose data location.
+        method : str
+            For 'cell': 'center' (sample at cell centers) or 'average'
+            (average property at cell's corner depths). For 'point':
+            'point' (sample at point depths).
+        max_depth_km : float, optional
+            Clip the 1D model to this depth.
+        """
+        where_l = where.lower()
+        method_l = method.lower()
+
+        if where_l not in ("cell", "point"):
+            raise ValueError("where must be 'cell' or 'point'")
+
+        if where_l == "point":
+            pts = np.asarray(self.mesh.points, dtype=float)  # type: ignore
+            depths = self._depths_from_points(pts)
+            vals = self._sample_1d_property_at_depths(
+                model_name, property_name, depths, max_depth_km
+            )
+            self.mesh.point_data[property_name] = vals  # type: ignore
+            return vals
+
+        # Cell data
+        centers = self._cell_centers_points()
+        if method_l == "center":
+            depths = self._depths_from_points(centers)
+            vals = self._sample_1d_property_at_depths(
+                model_name, property_name, depths, max_depth_km
+            )
+        elif method_l == "average":
+            # Approximate by averaging values at cell corner depths
+            # Get connectivity to fetch cell point ids
+            # Using PyVista convenience: extract cell points per id
+            vals = np.zeros(self.mesh.n_cells, dtype=float)  # type: ignore
+
+            for cid in range(self.mesh.n_cells):  # type: ignore
+                cell = self.mesh.extract_cells(cid)
+                cpts = np.asarray(cell.points, dtype=float)  # type: ignore
+                d = self._depths_from_points(cpts)
+                v = self._sample_1d_property_at_depths(
+                    model_name, property_name, d, max_depth_km
+                )
+                vals[cid] = float(np.nanmean(v))
+        else:
+            raise ValueError("Unsupported method for cell mapping")
+
+        self.mesh.cell_data[property_name] = vals  # type: ignore
+        return vals
+
+    def add_scalars_from_1d_model(
+        self,
+        model_name: str,
+        properties: Iterable[str] = ("vp", "vs", "rho"),
+        where: str = "cell",
+        method: str = "center",
+        max_depth_km: Optional[float] = None,
+    ) -> Dict[str, np.ndarray]:
+        """Attach multiple scalars from a TauP 1D model to mesh."""
+        out: Dict[str, np.ndarray] = {}
+        for p in properties:
+            out[p] = self.add_scalar_from_1d_model(
+                model_name,
+                p,
+                where=where,
+                method=method,
+                max_depth_km=max_depth_km,
+            )
+        return out
+
+    def ensure_cell_scalar(
+        self,
+        name: str,
+        strategy: str = "point_to_cell",
+        model_name: Optional[str] = None,
+    ) -> np.ndarray:
+        """Ensure a cell_data scalar exists; create if necessary.
+
+        Order:
+        - If already in cell_data, return it.
+        - If in point_data and strategy='point_to_cell', convert using
+          point_data_to_cell_data and copy that array.
+        - Else, if model_name provided, populate from 1D model using
+          add_scalar_from_1d_model(model_name, name, where='cell').
+        - Else, raise KeyError.
+        """
+        try:
+            return self.mesh.cell_data[name]  # type: ignore
+        except Exception:
+            pass
+
+        if strategy == "point_to_cell" and name in getattr(
+            self.mesh, "point_data", {}
+        ):
+            ds = self.mesh.point_data_to_cell_data()  # type: ignore
+            arr = np.asarray(ds.cell_data[name], dtype=float)  # type: ignore
+            self.mesh.cell_data[name] = arr  # type: ignore
+            return arr
+
+        if model_name is not None:
+            arr = self.add_scalar_from_1d_model(
+                model_name, name, where="cell", method="center"
+            )
+            return arr
+
+        raise KeyError(
+            f"Cell scalar '{name}' not found and cannot be created."
+        )
+
+    # ----- Sensitivity kernels ---------------------------------------------
+    def compute_sensitivity_kernel(
+        self,
+        ray_points_xyz: Any,
+        property_name: str,
+        attach_name: Optional[str] = None,
+        epsilon: float = 0.0,
+        tol: float = 1e-6,
+        model_name: Optional[str] = None,
+    ) -> np.ndarray:
+        """Compute sensitivity kernel K = -L / (prop^2 + epsilon) per cell.
+
+        Parameters
+        ----------
+        ray_points_xyz : array-like
+            Ray polyline points (N,3) in km Cartesian.
+        property_name : str
+            'vp' or 'vs' (or other scalar) expected in cell_data.
+        attach_name : str, optional
+            If provided, store result as this cell_data name (default
+            is f"K_{property_name}").
+        epsilon : float
+            Small regularizer added to denominator to avoid division by zero.
+        tol : float
+            Geometric tolerance for path length calculation.
+        model_name : str, optional
+            If given and property is missing, populate from this 1D model.
+        """
+        lengths = self.compute_ray_cell_path_lengths(ray_points_xyz, tol=tol)
+        prop = self.ensure_cell_scalar(
+            property_name, strategy="point_to_cell", model_name=model_name
+        ).astype(float, copy=False)
+
+        denom = prop * prop
+        if epsilon > 0.0:
+            denom = denom + float(epsilon)
+
+        # Mask non-finite or non-positive denominators
+        valid = np.isfinite(denom) & (denom > 0.0)
+        kernel = np.zeros_like(lengths, dtype=float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            kernel[valid] = -lengths[valid] / denom[valid]
+
+        if attach_name is None:
+            attach_name = f"K_{property_name}"
+        self.mesh.cell_data[attach_name] = kernel  # type: ignore
+        return kernel
+
+    def compute_sensitivity_kernels_for_rays(
+        self,
+        rays_points_list: Iterable[Any],
+        property_name: str,
+        attach_name: Optional[str] = None,
+        accumulate: Optional[str] = "sum",
+        epsilon: float = 0.0,
+        tol: float = 1e-6,
+        model_name: Optional[str] = None,
+    ) -> np.ndarray:
+        """Compute kernels for multiple rays and optionally accumulate.
+
+        Parameters mirror compute_sensitivity_kernel, but accept a list of
+        ray polylines. If accumulate='sum' (default), returns a single
+        1D array and stores under attach_name or 'Ksum_{property}'. If
+        accumulate is None, returns a (n_rays, n_cells) stack and stores
+        per-ray arrays with suffixes if attach_name is provided.
+        """
+        # Ensure property exists once
+        _ = self.ensure_cell_scalar(
+            property_name, strategy="point_to_cell", model_name=model_name
+        )
+
+        kernels = []
+        for i, pts in enumerate(rays_points_list):
+            k = self.compute_sensitivity_kernel(
+                pts,
+                property_name,
+                attach_name=None,
+                epsilon=epsilon,
+                tol=tol,
+                model_name=None,
+            )
+            kernels.append(k)
+
+        K = np.vstack(kernels)
+        if accumulate == "sum":
+            Ksum = K.sum(axis=0)
+            name = attach_name or f"Ksum_{property_name}"
+            self.mesh.cell_data[name] = Ksum  # type: ignore
+            return Ksum
+
+        if attach_name is not None:
+            for i, arr in enumerate(kernels):
+                self.mesh.cell_data[f"{attach_name}_{i}"] = arr  # type: ignore
+        return K
+
     @staticmethod
     def _clip_segment_by_tetra(
         tet_pts: np.ndarray,

@@ -15,7 +15,7 @@ source_lat, source_lon = 10.0, 20.0
 source_depth = 30.0
 receiver_lat, receiver_lon = -20.0, 100.0
 
-phases = ['P']
+phases = ['PKKP']
 
 rays, info = tracer.get_ray_paths(
     source_lat, source_lon, source_depth,
@@ -105,3 +105,52 @@ p_len.add_text(
     font_size=10,
 )
 p_len.show()
+
+# --- Sensitivity kernels (vp, vs) using PREM mapping ---------------------
+# Map 1D PREM properties to mesh cells
+earth_mesh_model.add_scalars_from_1d_model(
+    model_name=model,
+    properties=("vp", "vs"),
+    where="cell",
+    method="center",
+)
+
+# Compute kernels for the current ray
+K_vp = earth_mesh_model.compute_sensitivity_kernel(
+    points_xyz, "vp", attach_name="K_vp", epsilon=0.0, tol=1e-6,
+    model_name=None,
+)
+K_vs = earth_mesh_model.compute_sensitivity_kernel(
+    points_xyz, "vs", attach_name="K_vs", epsilon=0.0, tol=1e-6,
+    model_name=None,
+)
+
+print(
+    f"K_vp nonzero cells: {(K_vp != 0).sum()} | "
+    f"K_vs nonzero cells: {(K_vs != 0).sum()}"
+)
+
+# Visualize kernels on the great-circle slice
+p_kvp = earth_mesh_model.plot_slice(
+    source_lat=source_lat,
+    source_lon=source_lon,
+    receiver_lat=receiver_lat,
+    receiver_lon=receiver_lon,
+    scalar_name="K_vp",
+    cmap="seismic",
+    wireframe=True,
+)
+p_kvp.add_text("Slice colored by K_vp", position="upper_left", font_size=10)
+p_kvp.show()
+
+p_kvs = earth_mesh_model.plot_slice(
+    source_lat=source_lat,
+    source_lon=source_lon,
+    receiver_lat=receiver_lat,
+    receiver_lon=receiver_lon,
+    scalar_name="K_vs",
+    cmap="seismic",
+    wireframe=True,
+)
+p_kvs.add_text("Slice colored by K_vs", position="upper_left", font_size=10)
+p_kvs.show()
