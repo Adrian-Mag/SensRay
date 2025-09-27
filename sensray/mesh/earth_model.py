@@ -190,12 +190,94 @@ class MeshEarthModel:
     def add_points(
         self,
         plotter: Any,
-        points_xyz: Union[np.ndarray, Iterable[Iterable[float]]],
+        points_xyz: Union[
+            np.ndarray,
+            Iterable[Iterable[float]],
+            Dict[str, Any],
+        ],
         color: str = "red",
         point_size: float = 8.0,
     ) -> None:
-        """Overlay points (x, y, z) on an existing plotter."""
-        pts = np.asarray(points_xyz, dtype=float)
+        """Overlay points on an existing plotter.
+
+        Accepts:
+        - Nx3 array-like of Cartesian XYZ (km)
+        - 3xN array-like (auto-transposed)
+        - 1D flat array of length 3N (reshaped)
+        - dict with keys {"x","y","z"}
+        - dict with geo keys {"lat","lon"} and either "r"/"radius[_km]"
+          or "depth[_km]" (converted to Cartesian using model radius)
+        """
+        pts: np.ndarray
+
+        # Dict inputs: x/y/z or lat/lon + r/depth
+        if isinstance(points_xyz, dict):  # type: ignore[unreachable]
+            d: Dict[str, Any] = points_xyz  # type: ignore[assignment]
+            # Cartesian components
+            if all(k in d for k in ("x", "y", "z")):
+                x = np.asarray(d["x"], dtype=float)
+                y = np.asarray(d["y"], dtype=float)
+                z = np.asarray(d["z"], dtype=float)
+                if not (x.shape == y.shape == z.shape):
+                    raise ValueError("x, y, z must have the same shape")
+                pts = np.column_stack([x, y, z])
+            # Geographic components -> Cartesian
+            elif ("lat" in d or "latitude" in d) and (
+                "lon" in d or "longitude" in d or "long" in d
+            ):
+                lat_val = d.get("lat", d.get("latitude"))
+                lon_val = d.get("lon", d.get("longitude", d.get("long")))
+                lat = np.asarray(lat_val, dtype=float)
+                lon = np.asarray(lon_val, dtype=float)
+                r = d.get("r", d.get("radius", d.get("radius_km")))
+                depth = d.get("depth", d.get("depth_km"))
+                if r is not None:
+                    rad = np.asarray(r, dtype=float)
+                elif depth is not None:
+                    rad = self.radius_km - np.asarray(depth, dtype=float)
+                else:
+                    rad = np.full_like(lat, self.radius_km, dtype=float)
+                # Convert to Cartesian (loop to use lightweight converter)
+                from sensray.utils.coordinates import CoordinateConverter
+
+                pts = np.vstack(
+                    [
+                        CoordinateConverter.earth_to_cartesian(
+                            float(la), float(lo), float(rr),
+                            earth_radius=self.radius_km,
+                        )
+                        for la, lo, rr in zip(lat, lon, rad)
+                    ]
+                ).astype(float)
+            else:
+                raise ValueError(
+                    "Unsupported dict keys for points: expected x/y/z or "
+                    "lat/lon with r or depth"
+                )
+        else:
+            # General array-like handling
+            arr = np.asarray(points_xyz)
+            # If it's object-dtype of 3-tuples, coerce via list()
+            if arr.dtype == object and arr.ndim == 1:
+                arr = np.asarray(list(arr), dtype=float)
+            if arr.ndim == 1:
+                if arr.size % 3 != 0:
+                    raise ValueError(
+                        "1D points array length must be a multiple of 3"
+                    )
+                pts = arr.reshape(-1, 3).astype(float)
+            elif arr.ndim == 2:
+                if arr.shape[1] == 3:
+                    pts = arr.astype(float, copy=False)
+                elif arr.shape[0] == 3:
+                    pts = arr.T.astype(float, copy=False)
+                else:
+                    raise ValueError(
+                        "Points array must have shape (N,3) or (3,N)"
+                    )
+            else:
+                raise ValueError("Points must be 1D or 2D array-like")
+
         plotter.add_points(pts, color=color, point_size=point_size)
 
     def slice_great_circle(
