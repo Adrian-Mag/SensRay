@@ -187,6 +187,274 @@ class MeshEarthModel:
         )
         return plotter
 
+    # ----- Geometry utilities ---------------------------------------------
+    def cell_type_summary(self) -> Dict[int, int]:
+        """Return a mapping of VTK cell type id -> count.
+
+        Useful to see what kinds of elements are present (e.g., tets, tris).
+        """
+        try:
+            import numpy as _np
+            types = _np.asarray(
+                self.mesh.celltypes
+            )  # type: ignore[attr-defined]
+        except Exception:
+            return {}
+        out: Dict[int, int] = {}
+        for t in _np.unique(types):
+            out[int(t)] = int((types == t).sum())
+        return out
+
+    def filter_to_tetrahedra(self, inplace: bool = True) -> Any:
+        """Keep only tetrahedral cells from the mesh.
+
+        Parameters
+        ----------
+        inplace : bool
+            If True, updates this model's mesh in place and returns it.
+            If False, returns a new PyVista dataset with only tets.
+        """
+        if pv is None:  # pragma: no cover
+            raise ImportError("PyVista is required for mesh operations.")
+        from pyvista import _vtk as vtk  # type: ignore
+        import numpy as _np
+
+        try:
+            types = _np.asarray(
+                self.mesh.celltypes
+            )  # type: ignore[attr-defined]
+        except Exception:
+            # Nothing to do
+            return self.mesh
+        tet_ids = _np.where(types == vtk.VTK_TETRA)[0]
+        if tet_ids.size == 0:
+            return self.mesh
+        tet_only = self.mesh.extract_cells(
+            tet_ids
+        )  # type: ignore[attr-defined]
+        if inplace:
+            self.mesh = tet_only
+            return self.mesh
+        return tet_only
+
+    @staticmethod
+    def _normalize_points_array(points_xyz: Any) -> np.ndarray:
+        """Return an (N, 3) float array from various point representations.
+
+        Accepts Nx3, 3xN, or 1D 3N arrays. Does not handle dicts here.
+        """
+        arr = np.asarray(points_xyz)
+        if arr.ndim == 1:
+            if arr.size % 3 != 0:
+                raise ValueError(
+                    "1D points array length must be "
+                    "multiple of 3"
+                )
+            return arr.reshape(-1, 3).astype(float)
+        if arr.ndim == 2 and arr.shape[1] == 3:
+            return arr.astype(float, copy=False)
+        if arr.ndim == 2 and arr.shape[0] == 3:
+            return arr.T.astype(float, copy=False)
+        raise ValueError(
+            "Points must have shape (N,3) or (3,N) or flat 1D of 3N"
+        )
+
+    @staticmethod
+    def _clip_segment_by_tetra(
+        tet_pts: np.ndarray,
+        p0: np.ndarray,
+        p1: np.ndarray,
+        tol: float = 1e-8,
+    ) -> float:
+        """Length of segment inside a tetrahedron.
+
+        Computes the length of segment p0->p1 inside the tetra defined by
+        tet_pts (4x3), using half-space clipping against the four faces.
+
+        Returns 0.0 if no intersection.
+        """
+        # Define 4 faces by vertex indices
+        faces = (
+            (0, 1, 2),
+            (0, 1, 3),
+            (0, 2, 3),
+            (1, 2, 3),
+        )
+        d = p1 - p0
+        seg_len = float(np.linalg.norm(d))
+        if seg_len == 0.0:
+            return 0.0
+        # Work with param t in [0,1]
+        t_min, t_max = 0.0, 1.0
+        centroid = tet_pts.mean(axis=0)
+        for ia, ib, ic in faces:
+            a, b, c = tet_pts[ia], tet_pts[ib], tet_pts[ic]
+            n = np.cross(b - a, c - a)
+            n_norm = np.linalg.norm(n)
+            if n_norm == 0.0:
+                # Degenerate face; skip
+                continue
+            n = n / n_norm
+            # Ensure outward such that centroid is inside:
+            # we want inside as n·(x-a) <= 0
+            if np.dot(n, centroid - a) > 0:
+                n = -n
+            num = -np.dot(n, p0 - a)
+            den = np.dot(n, d)
+            if abs(den) < tol:
+                # Segment parallel to plane; reject if outside
+                if np.dot(n, p0 - a) > tol:
+                    return 0.0
+                # Else, inequality holds for entire segment for this plane
+                continue
+            t_hit = num / den
+            if den > 0:
+                # entering constraint: t <= t_hit
+                t_max = min(t_max, t_hit)
+            else:
+                # leaving constraint: t >= t_hit
+                t_min = max(t_min, t_hit)
+            if t_min - t_max > tol:
+                return 0.0
+        # Clamp to [0,1]
+        t0 = max(0.0, min(1.0, t_min))
+        t1 = max(0.0, min(1.0, t_max))
+        if t1 <= t0:
+            return 0.0
+        return (t1 - t0) * seg_len
+
+    def compute_ray_cell_path_lengths(
+        self,
+        ray_points_xyz: Any,
+        attach_name: Optional[str] = None,
+        tol: float = 1e-6,
+    ) -> np.ndarray:
+        """Compute per-cell path length of a ray polyline through a tet mesh.
+
+        Parameters
+        ----------
+        ray_points_xyz : array-like
+            Sequence of points (N,3) defining the ray polyline in Cartesian km.
+            If provided as 3xN or flat 1D 3N, it will be normalized.
+        attach_name : str, optional
+            If given, stores the resulting 1D array to cell_data[attach_name].
+        tol : float
+            Geometric tolerance for locator queries and clipping checks.
+
+        Returns
+        -------
+        lengths : np.ndarray
+            1D array of length n_cells with accumulated path length per cell.
+
+        Notes
+        -----
+        - Currently supports tetrahedral meshes. For other cell types, emits a
+          warning and returns zeros.
+        - Efficient for long rays: uses vtkStaticCellLocator to prune tests.
+        """
+        if pv is None:  # pragma: no cover
+            raise ImportError("PyVista is required for geometric queries.")
+        from pyvista import _vtk as vtk  # type: ignore
+        import warnings
+
+        # Validate mesh: proceed if there are any tetrahedra; skip others
+        try:
+            celltypes = np.asarray(
+                self.mesh.celltypes  # type: ignore[attr-defined]
+            )
+        except Exception:
+            celltypes = None
+        if celltypes is None:
+            warnings.warn(
+                "Mesh has no celltypes information; cannot compute path "
+                "lengths.",
+                UserWarning,
+            )
+            zeros = np.zeros(getattr(self.mesh, "n_cells", 0), dtype=float)
+            if attach_name:
+                self.mesh.cell_data[
+                    attach_name
+                ] = zeros  # type: ignore[attr-defined]
+            return zeros
+        tet_mask = celltypes == vtk.VTK_TETRA
+        if not np.any(tet_mask):
+            warnings.warn(
+                "Mesh contains no tetrahedral cells; returning zeros.",
+                UserWarning,
+            )
+            zeros = np.zeros(getattr(self.mesh, "n_cells", 0), dtype=float)
+            if attach_name:
+                self.mesh.cell_data[
+                    attach_name
+                ] = zeros  # type: ignore[attr-defined]
+            return zeros
+
+        # Normalize points to (N,3)
+        pts = self._normalize_points_array(ray_points_xyz)
+        n = len(pts)
+        n_cells = self.mesh.n_cells  # type: ignore[attr-defined]
+        lengths = np.zeros(n_cells, dtype=float)
+        if n < 2:
+            if attach_name:
+                self.mesh.cell_data[
+                    attach_name
+                ] = lengths  # type: ignore[attr-defined]
+            return lengths
+
+        # Build spatial locator
+        locator = vtk.vtkStaticCellLocator()
+        locator.SetDataSet(self.mesh)
+        locator.BuildLocator()
+
+        id_list = vtk.vtkIdList()
+        # Cache for tetra points to avoid repeated extraction cost
+        tet_pts_cache: Dict[int, np.ndarray] = {}
+        for i in range(n - 1):
+            p0 = np.asarray(pts[i], dtype=float)
+            p1 = np.asarray(pts[i + 1], dtype=float)
+            if not np.all(np.isfinite(p0)) or not np.all(np.isfinite(p1)):
+                continue
+            if np.allclose(p0, p1):
+                continue
+            id_list.Reset()
+            # Find candidate cells intersected by the segment
+            locator.FindCellsAlongLine(p0, p1, tol, id_list)
+            # For each candidate, clip and accumulate
+            for k in range(id_list.GetNumberOfIds()):
+                cid = id_list.GetId(k)
+                # Skip non-tetrahedral candidate cells
+                if cid < 0 or cid >= n_cells or not tet_mask[cid]:
+                    continue
+                # Extract cell points (should be 4 points for tetra)
+                tet_pts = tet_pts_cache.get(cid)
+                if tet_pts is None:
+                    cell = self.mesh.extract_cells(
+                        cid
+                    )  # type: ignore[attr-defined]
+                    tet_pts = np.asarray(
+                        cell.points, dtype=float
+                    )  # type: ignore[attr-defined]
+                    # Defensive: some extra points can be present;
+                    # try to select unique
+                    if tet_pts.shape[0] > 4:
+                        # Use the first 4 unique rows
+                        _, idx = np.unique(
+                            tet_pts, axis=0, return_index=True
+                        )
+                        tet_pts = tet_pts[np.sort(idx)[:4]]
+                    tet_pts_cache[cid] = tet_pts
+                if tet_pts.shape[0] != 4:
+                    continue
+                seg_len_in = self._clip_segment_by_tetra(tet_pts, p0, p1, tol)
+                if seg_len_in > 0:
+                    lengths[cid] += seg_len_in
+
+        if attach_name:
+            self.mesh.cell_data[
+                attach_name
+            ] = lengths  # type: ignore[attr-defined]
+        return lengths
+
     def add_points(
         self,
         plotter: Any,
