@@ -55,6 +55,10 @@ class MeshEarthModel:
             for key, arr in cell_data.items():
                 self.set_cell_data(key, np.asarray(arr))
 
+        # Internal constants for helper arrays
+        self._PARENT_ID_NAME = "__parent_cell_id__"
+        self._RADIUS_NAME = "__radius__"
+
     # ----- Construction helpers ---------------------------------------------
     @classmethod
     def from_pygmsh_sphere(
@@ -356,6 +360,65 @@ class MeshEarthModel:
 
         self.mesh.cell_data[property_name] = vals  # type: ignore
         return vals
+
+    # ----- Internal helpers (no behavior change) ---------------------------
+    def _ensure_parent_ids(self, ds: Any) -> Any:
+        """Ensure the dataset has a parent-cell-id array in cell_data.
+
+        Returns the same dataset reference (mutated) for convenience.
+        """
+        if self._PARENT_ID_NAME not in getattr(ds, "cell_data", {}):
+            ds.cell_data[self._PARENT_ID_NAME] = np.arange(  # type: ignore
+                ds.n_cells, dtype=np.int64  # type: ignore[attr-defined]
+            )
+        return ds
+
+    def _map_parent_cell_scalar(
+        self, surface: Any, volume: Any, name: str
+    ) -> None:
+        """Map cell scalar from volume onto surface polygons using parent ids.
+
+        Modifies `surface` in place if a valid id mapping is present.
+        """
+        # Prefer explicitly injected parent ids
+        parent_ids = None
+        if self._PARENT_ID_NAME in getattr(surface, "cell_data", {}):
+            parent_ids = np.asarray(
+                surface.cell_data[self._PARENT_ID_NAME], dtype=int
+            )  # type: ignore
+        # Fallback to VTK-provided original ids if present
+        elif "vtkOriginalCellIds" in getattr(surface, "cell_data", {}):
+            parent_ids = np.asarray(
+                surface.cell_data["vtkOriginalCellIds"], dtype=int
+            )  # type: ignore
+        if parent_ids is None:
+            return
+        vals = np.asarray(volume.cell_data[name])  # type: ignore[attr-defined]
+        mask = (parent_ids >= 0) & (parent_ids < vals.shape[0])
+        mapped = np.full(parent_ids.shape[0], np.nan, dtype=float)
+        mapped[mask] = vals[parent_ids[mask]]
+        surface.cell_data[name] = mapped  # type: ignore
+
+    @staticmethod
+    def _auto_clim_from_surface(
+        surface: Any, scalar_name: str
+    ) -> Optional[tuple]:
+        """Compute a non-degenerate clim from surface scalars if possible."""
+        arr = None
+        if scalar_name in getattr(surface, "cell_data", {}):
+            arr = np.asarray(surface.cell_data[scalar_name])  # type: ignore
+        elif scalar_name in getattr(surface, "point_data", {}):
+            arr = np.asarray(surface.point_data[scalar_name])  # type: ignore
+        if arr is None or arr.size == 0:
+            return None
+        vmin = float(np.nanmin(arr))
+        vmax = float(np.nanmax(arr))
+        if not (np.isfinite(vmin) and np.isfinite(vmax)):
+            return None
+        if vmin == vmax:
+            eps = 1e-6 if vmin == 0.0 else abs(vmin) * 1e-6
+            return (vmin, vmin + eps)
+        return (vmin, vmax)
 
     def add_scalars_from_1d_model(
         self,
@@ -861,23 +924,14 @@ class MeshEarthModel:
                 except Exception:
                     ds = ds.point_data_to_cell_data()  # type: ignore
             # Inject a parent cell id array so the cutter carries it over
-            if "__parent_cell_id__" not in getattr(ds, "cell_data", {}):
-                ds.cell_data["__parent_cell_id__"] = np.arange(  # type: ignore
-                    ds.n_cells, dtype=np.int64  # type: ignore[attr-defined]
-                )
+            ds = self._ensure_parent_ids(ds)
 
         # Slice through origin
         sl = ds.slice(normal=normal, origin=(0.0, 0.0, 0.0))
 
         if scalar_name is not None:
-            # Read parent ids from slice (copied from input cell data)
-            pid_name = "__parent_cell_id__"
-            if pid_name in getattr(sl, "cell_data", {}):
-                parent_ids = np.asarray(
-                    sl.cell_data[pid_name], dtype=int
-                )  # type: ignore
-                vals = np.asarray(ds.cell_data[scalar_name])  # type: ignore
-                sl.cell_data[scalar_name] = vals[parent_ids]  # type: ignore
+            # Map parent cell scalar to slice polygons when possible
+            self._map_parent_cell_scalar(sl, ds, scalar_name)
 
         return sl
 
@@ -900,29 +954,13 @@ class MeshEarthModel:
             raise ImportError("PyVista is required to plot surfaces.")
 
         has_cell = scalar_name in getattr(surface, "cell_data", {})
-        has_point = scalar_name in getattr(surface, "point_data", {})
 
         # Derive color limits if needed
-        use_clim = clim
-        if use_clim is None:
-            arr = None
-            if has_cell:
-                arr = np.asarray(
-                    surface.cell_data[scalar_name]
-                )  # type: ignore
-            elif has_point:
-                arr = np.asarray(
-                    surface.point_data[scalar_name]
-                )  # type: ignore
-            if arr is not None and arr.size:
-                vmin = float(np.nanmin(arr))
-                vmax = float(np.nanmax(arr))
-                if np.isfinite(vmin) and np.isfinite(vmax):
-                    if vmin == vmax:
-                        eps = 1e-6 if vmin == 0.0 else abs(vmin) * 1e-6
-                        use_clim = (vmin, vmin + eps)
-                    else:
-                        use_clim = (vmin, vmax)
+        use_clim = (
+            clim if clim is not None else self._auto_clim_from_surface(
+                surface, scalar_name
+            )
+        )
 
         plotter = pv.Plotter(notebook=notebook)
         scalars = (
@@ -1029,57 +1067,50 @@ class MeshEarthModel:
         This uses an iso-surface (contour) of radial distance on the
         volumetric mesh so both the surface geometry and any optional
         wireframe reflect the underlying mesh discretization.
+
+        If `scalar_name` is provided and exists as a cell scalar on the
+        volumetric mesh, the extracted shell triangles are colored using
+        the parent cell's scalar value (constant per polygon; no
+        interpolation).
         """
         if pv is None:  # pragma: no cover
             raise ImportError("PyVista is required to plot surfaces.")
 
-        # Prepare a working copy and a per-point radius array
+        # Prepare dataset and per-point radius array
         ds = self.mesh
-        if (
-            scalar_name is not None
-            and scalar_name not in ds.point_data  # type: ignore[attr-defined]
-        ):
-            ds = ds.cell_data_to_point_data()  # type: ignore[attr-defined]
+        if scalar_name is not None:
+            # Ensure scalar lives on cells; emit a warning if we must
+            # convert from point->cell.
+            _ = self.ensure_cell_scalar(scalar_name, strategy="point_to_cell")
+            # Inject parent cell ids so the contour can carry them over
+            ds = self._ensure_parent_ids(ds)
         base = ds.copy()
-        base["__radius__"] = np.linalg.norm(base.points, axis=1)
+        base[self._RADIUS_NAME] = np.linalg.norm(base.points, axis=1)
 
         # Extract the spherical shell surface from the underlying mesh
-        shell = base.contour(isosurfaces=[radius_km], scalars="__radius__")
+        shell = base.contour(
+            isosurfaces=[radius_km], scalars=self._RADIUS_NAME
+        )
 
-        # If the extracted shell doesn't already carry the requested
-        # scalar as point-data, sample the volumetric dataset so the
-        # shell gets interpolated scalar values. This prevents
-        # `nan_opacity` from making the entire shell transparent when
-        # the scalar is missing on the contour geometry.
-        if (
-            scalar_name is not None
-            and scalar_name not in getattr(shell, "point_data", {})
-        ):
-            try:
-                shell = shell.sample(ds)  # type: ignore[attr-defined]
-            except Exception:
-                # Sampling failed; continue and let downstream logic
-                # handle missing data (will result in NaNs).
-                pass
+        # Map parent cell scalars onto shell polygons for constant coloring
+        if scalar_name is not None:
+            self._map_parent_cell_scalar(shell, ds, scalar_name)
 
         if scalar_name is not None:
             # If no clim provided, derive it from the shell's scalar values
-            local_clim = None
-            try:
-                arr = np.asarray(
-                    shell.point_data[scalar_name]
-                )  # type: ignore[attr-defined]
-                vmin = float(np.nanmin(arr))
-                vmax = float(np.nanmax(arr))
-                if np.isfinite(vmin) and np.isfinite(vmax):
-                    if vmin == vmax:
-                        # Avoid degenerate range; widen slightly
-                        eps = 1e-6 if vmin == 0.0 else abs(vmin) * 1e-6
-                        local_clim = (vmin, vmin + eps)
-                    else:
-                        local_clim = (vmin, vmax)
-            except Exception:
-                local_clim = None
+            local_clim = self._auto_clim_from_surface(shell, scalar_name)
+
+            # As a last resort, if neither cell nor point data exists
+            # for this scalar, sample the volumetric dataset to create
+            # point-data scalars so plotting still works (interpolated).
+            if (
+                scalar_name not in getattr(shell, "cell_data", {})
+                and scalar_name not in getattr(shell, "point_data", {})
+            ):
+                try:
+                    shell = shell.sample(ds)  # type: ignore[attr-defined]
+                except Exception:
+                    pass
 
             return self.plot_surface(
                 shell,
