@@ -401,7 +401,25 @@ class MeshEarthModel:
         if strategy == "point_to_cell" and name in getattr(
             self.mesh, "point_data", {}
         ):
-            ds = self.mesh.point_data_to_cell_data()  # type: ignore
+            import warnings
+
+            warnings.warn(
+                (
+                    "Converting point_data to cell_data for '%s'. "
+                    "Prefer storing volumetric properties on cells to avoid "
+                    "implicit interpolation or smoothing."
+                ) % name,
+                UserWarning,
+            )
+            # Try to avoid copying point data back into the returned
+            # dataset when PyVista supports the flag; fall back otherwise.
+            try:
+                ds = self.mesh.point_data_to_cell_data(
+                    pass_point_data=False  # type: ignore[arg-type]
+                )
+            except TypeError:
+                # Older PyVista versions may not accept the kwarg
+                ds = self.mesh.point_data_to_cell_data()  # type: ignore
             arr = np.asarray(ds.cell_data[name], dtype=float)  # type: ignore
             self.mesh.cell_data[name] = arr  # type: ignore
             return arr
@@ -808,14 +826,14 @@ class MeshEarthModel:
         receiver_lon: float,
         scalar_name: Optional[str] = None,
     ) -> Any:
-        """Slice the mesh by the plane of the source-receiver great circle.
+        """Slice the mesh by the great-circle plane through source/receiver.
 
-        If scalar_name is provided, convert cell data to point data so the
-        resulting slice carries interpolated point scalars for coloring.
+        If `scalar_name` is provided, the slice polygons are colored by the
+        parent cell's scalar (constant per polygon; no interpolation).
         """
-        # Use coordinate utility instead of visualizer helper
         from sensray.utils.coordinates import CoordinateConverter
 
+        # Build great-circle plane (through Earth center)
         src = np.asarray(
             CoordinateConverter.earth_to_cartesian(
                 source_lat, source_lon, 0.0, earth_radius=self.radius_km
@@ -828,71 +846,40 @@ class MeshEarthModel:
         )
         normal = np.cross(src, rec)
         normal = normal / np.linalg.norm(normal)
-        # Choose dataset: convert to point data if a scalar is requested
+
+        # Prepare dataset: ensure scalar is on cells; add parent id array.
         ds = self.mesh
-        if (
-            scalar_name is not None
-            and scalar_name not in ds.point_data  # type: ignore[attr-defined]
-        ):
-            ds = ds.cell_data_to_point_data()  # type: ignore[attr-defined]
+        if scalar_name is not None:
+            if (
+                scalar_name in getattr(ds, "point_data", {})
+                and scalar_name not in getattr(ds, "cell_data", {})
+            ):
+                try:
+                    ds = ds.point_data_to_cell_data(  # type: ignore
+                        pass_point_data=False
+                    )
+                except Exception:
+                    ds = ds.point_data_to_cell_data()  # type: ignore
+            # Inject a parent cell id array so the cutter carries it over
+            if "__parent_cell_id__" not in getattr(ds, "cell_data", {}):
+                ds.cell_data["__parent_cell_id__"] = np.arange(  # type: ignore
+                    ds.n_cells, dtype=np.int64  # type: ignore[attr-defined]
+                )
 
         # Slice through origin
-        return ds.slice(normal=normal, origin=(0.0, 0.0, 0.0))
+        sl = ds.slice(normal=normal, origin=(0.0, 0.0, 0.0))
 
-    def slice_great_circle_with_scalar(
-        self,
-        source_lat: float,
-        source_lon: float,
-        receiver_lat: float,
-        receiver_lon: float,
-        scalar_name: str,
-    ) -> Any:
-        """Deprecated: use slice_great_circle(..., scalar_name=...)."""
-        import warnings
+        if scalar_name is not None:
+            # Read parent ids from slice (copied from input cell data)
+            pid_name = "__parent_cell_id__"
+            if pid_name in getattr(sl, "cell_data", {}):
+                parent_ids = np.asarray(
+                    sl.cell_data[pid_name], dtype=int
+                )  # type: ignore
+                vals = np.asarray(ds.cell_data[scalar_name])  # type: ignore
+                sl.cell_data[scalar_name] = vals[parent_ids]  # type: ignore
 
-        warnings.warn(
-            "slice_great_circle_with_scalar is deprecated; "
-            "use slice_great_circle(..., scalar_name=...) instead",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self.slice_great_circle(
-            source_lat,
-            source_lon,
-            receiver_lat,
-            receiver_lon,
-            scalar_name=scalar_name,
-        )
-
-    def sphere_surface_with_scalar(
-        self,
-        radius_km: float,
-        scalar_name: str,
-        theta_res: int = 90,
-        phi_res: int = 180,
-    ) -> Any:
-        """Sample volumetric scalar values onto a spherical surface.
-
-        Returns a PolyData sphere with the requested scalar as point data.
-        """
-        if pv is None:  # pragma: no cover
-            raise ImportError("PyVista is required to build surfaces.")
-
-        # Surface geometry
-        sphere = pv.Sphere(
-            radius=radius_km,
-            theta_resolution=theta_res,
-            phi_resolution=phi_res,
-        )
-
-        # Ensure we have point data for sampling
-        ds = self.mesh
-        if scalar_name not in ds.point_data:  # type: ignore[attr-defined]
-            ds = ds.cell_data_to_point_data()  # type: ignore[attr-defined]
-
-        # Sample/interpolate scalar onto the sphere's points
-        sampled = sphere.sample(ds)  # type: ignore[attr-defined]
-        return sampled
+        return sl
 
     def plot_surface(
         self,
@@ -908,18 +895,26 @@ class MeshEarthModel:
         opacity: float = 1.0,
         nan_opacity: float = 0.0,
     ) -> Any:
-        """Plot a surface with a scalar colormap and return the Plotter."""
+        """Plot a surface with a scalar colormap (cell or point scalars)."""
         if pv is None:  # pragma: no cover
             raise ImportError("PyVista is required to plot surfaces.")
-        # Derive color limits from data if not provided
+
+        has_cell = scalar_name in getattr(surface, "cell_data", {})
+        has_point = scalar_name in getattr(surface, "point_data", {})
+
+        # Derive color limits if needed
         use_clim = clim
-        if use_clim is None and scalar_name in getattr(
-            surface, "point_data", {}
-        ):
-            try:
+        if use_clim is None:
+            arr = None
+            if has_cell:
+                arr = np.asarray(
+                    surface.cell_data[scalar_name]
+                )  # type: ignore
+            elif has_point:
                 arr = np.asarray(
                     surface.point_data[scalar_name]
-                )  # type: ignore[attr-defined]
+                )  # type: ignore
+            if arr is not None and arr.size:
                 vmin = float(np.nanmin(arr))
                 vmax = float(np.nanmax(arr))
                 if np.isfinite(vmin) and np.isfinite(vmax):
@@ -928,28 +923,25 @@ class MeshEarthModel:
                         use_clim = (vmin, vmin + eps)
                     else:
                         use_clim = (vmin, vmax)
-            except Exception:
-                use_clim = clim
 
         plotter = pv.Plotter(notebook=notebook)
-        # Use numeric array to avoid ambiguity with active scalars
-        scalar_array = None
-        try:
-            scalar_array = surface.point_data[scalar_name]
-        except Exception:
-            scalar_array = scalar_name  # fallback to name
+        scalars = (
+            surface.cell_data[scalar_name]
+            if has_cell
+            else surface.point_data[scalar_name]
+        )
         plotter.add_mesh(
             surface,
-            scalars=scalar_array,
+            scalars=scalars,
+            preference="cell" if has_cell else "point",
             cmap=cmap,
             clim=use_clim,
             show_edges=show_edges,
             opacity=opacity,
             nan_opacity=nan_opacity,
+            interpolate_before_map=False,
             show_scalar_bar=False,
         )
-        # Add the scalar bar now so it's linked to the scalar-mapped surface,
-        # not the later wireframe actor (which would yield a 0–1 default).
         plotter.add_scalar_bar(title=scalar_name)  # type: ignore[attr-defined]
         if show_wireframe:
             plotter.add_mesh(
@@ -980,9 +972,8 @@ class MeshEarthModel:
     ) -> Any:
         """Compute a great-circle slice and plot it.
 
-        If `scalar_name` is provided the slice will carry interpolated point
-        scalars and the plot will use a colormap; otherwise the surface is
-        plotted with a single color.
+        If `scalar_name` is provided, polygons on the slice get a single
+        color copied from their parent mesh cell (no interpolation).
         """
         if pv is None:  # pragma: no cover
             raise ImportError("PyVista is required to plot surfaces.")
