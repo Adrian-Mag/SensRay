@@ -304,12 +304,15 @@ class RayPathTracer:
         else:
             return ray_paths
 
-    def extract_ray_coordinates(self, ray_paths: List,
-                                filter_by_distance: bool = True,
-                                target_distance: Optional[float] = None,
-                                distance_tolerance: float = 5.0) -> Dict:
+    def extract_in_plane_ray_coordinates(
+            self,
+            ray_paths: List,
+            filter_by_distance: bool = True,
+            target_distance: Optional[float] = None,
+            distance_tolerance: float = 5.0
+    ) -> Dict:
         """
-        Extract coordinates from ray path objects.
+        Extract coordinates from ray path objects in plane for plotting.
 
         Parameters
         ----------
@@ -387,8 +390,8 @@ class RayPathTracer:
         return coordinates
 
     def calculate_pierce_points(self,
-                               ray_paths: List,
-                               pierce_depths: List[float]) -> Dict:
+                                ray_paths: List,
+                                pierce_depths: List[float]) -> Dict:
         """
         Calculate where rays pierce specific depth levels.
 
