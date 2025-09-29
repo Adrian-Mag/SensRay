@@ -284,13 +284,15 @@ class MeshEarthModel:
 
                 from sensray.utils.coordinates import CoordinateConverter
 
+                # Convert radius -> depth for converter
+                depth_arr = self.radius_km - rad
                 pts = np.vstack(
                     [
                         CoordinateConverter.earth_to_cartesian(
-                            float(la), float(lo), float(rr),
+                            float(la), float(lo), float(dd),
                             earth_radius=self.radius_km,
                         )
-                        for la, lo, rr in zip(lat, lon, rad)
+                        for la, lo, dd in zip(lat, lon, depth_arr)
                     ]
                 ).astype(float)
                 return pts
@@ -898,13 +900,14 @@ class MeshEarthModel:
                 # Convert to Cartesian (loop to use lightweight converter)
                 from sensray.utils.coordinates import CoordinateConverter
 
+                depth_arr = self.radius_km - rad
                 pts = np.vstack(
                     [
                         CoordinateConverter.earth_to_cartesian(
-                            float(la), float(lo), float(rr),
+                            float(la), float(lo), float(dd),
                             earth_radius=self.radius_km,
                         )
-                        for la, lo, rr in zip(lat, lon, rad)
+                        for la, lo, dd in zip(lat, lon, depth_arr)
                     ]
                 ).astype(float)
             else:
