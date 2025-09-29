@@ -241,18 +241,71 @@ class MeshEarthModel:
             return self.mesh
         return tet_only
 
-    @staticmethod
-    def _normalize_points_array(points_xyz: Any) -> np.ndarray:
+    def _normalize_points_array(self, points_xyz: Any) -> np.ndarray:
         """Return an (N, 3) float array from various point representations.
 
-        Accepts Nx3, 3xN, or 1D 3N arrays. Does not handle dicts here.
+        Supported inputs:
+        - ndarray with shape (N,3), (3,N), or flat 1D of length multiple of 3
+        - dict with keys {"x","y","z"} as 1D arrays
+                - dict with geographic keys {"lat"/"latitude",
+                      "lon"/"longitude"/"long"} and one of
+                      {"r"/"radius"/"radius_km"}
+                    or {"depth"/"depth_km"}; converted to Cartesian using model
+                    radius when needed.
         """
+        # Dict inputs
+        if isinstance(points_xyz, dict):
+            d: Dict[str, Any] = points_xyz  # type: ignore[name-defined]
+            # Cartesian x/y/z arrays
+            if all(k in d for k in ("x", "y", "z")):
+                x = np.asarray(d["x"], dtype=float)
+                y = np.asarray(d["y"], dtype=float)
+                z = np.asarray(d["z"], dtype=float)
+                if not (x.shape == y.shape == z.shape):
+                    raise ValueError("x, y, z must have the same shape")
+                return np.column_stack([x, y, z]).astype(float, copy=False)
+
+            # Geographic inputs -> Cartesian
+            has_lat = ("lat" in d) or ("latitude" in d)
+            has_lon = ("lon" in d) or ("longitude" in d) or ("long" in d)
+            if has_lat and has_lon:
+                lat_val = d.get("lat", d.get("latitude"))
+                lon_val = d.get("lon", d.get("longitude", d.get("long")))
+                lat = np.asarray(lat_val, dtype=float)
+                lon = np.asarray(lon_val, dtype=float)
+                r = d.get("r", d.get("radius", d.get("radius_km")))
+                depth = d.get("depth", d.get("depth_km"))
+                if r is not None:
+                    rad = np.asarray(r, dtype=float)
+                elif depth is not None:
+                    rad = self.radius_km - np.asarray(depth, dtype=float)
+                else:
+                    rad = np.full_like(lat, self.radius_km, dtype=float)
+
+                from sensray.utils.coordinates import CoordinateConverter
+
+                pts = np.vstack(
+                    [
+                        CoordinateConverter.earth_to_cartesian(
+                            float(la), float(lo), float(rr),
+                            earth_radius=self.radius_km,
+                        )
+                        for la, lo, rr in zip(lat, lon, rad)
+                    ]
+                ).astype(float)
+                return pts
+
+            raise ValueError(
+                "Unsupported dict for points: expected x/y/z or lat/lon "
+                "with r or depth"
+            )
+
+        # Array-like inputs
         arr = np.asarray(points_xyz)
         if arr.ndim == 1:
             if arr.size % 3 != 0:
                 raise ValueError(
-                    "1D points array length must be "
-                    "multiple of 3"
+                    "1D points array length must be multiple of 3"
                 )
             return arr.reshape(-1, 3).astype(float)
         if arr.ndim == 2 and arr.shape[1] == 3:
@@ -260,7 +313,8 @@ class MeshEarthModel:
         if arr.ndim == 2 and arr.shape[0] == 3:
             return arr.T.astype(float, copy=False)
         raise ValueError(
-            "Points must have shape (N,3) or (3,N) or flat 1D of 3N"
+            "Points must have shape (N,3) or (3,N) or flat 1D of 3N, or a "
+            "supported dict"
         )
 
     # ----- 1D model mapping -------------------------------------------------
@@ -667,8 +721,11 @@ class MeshEarthModel:
         Parameters
         ----------
         ray_points_xyz : array-like
-            Sequence of points (N,3) defining the ray polyline in Cartesian km.
-            If provided as 3xN or flat 1D 3N, it will be normalized.
+            Ray polyline in Cartesian km. Accepted formats:
+            - ndarray with shape (N,3), (3,N), or flat 1D of length 3N
+            - dict with x/y/z arrays (from extract_ray_coordinates)
+            - dict with geo lat/lon + depth or radius
+            These inputs are normalized internally to (N,3).
         attach_name : str, optional
             If given, stores the resulting 1D array to cell_data[attach_name].
         tol : float
