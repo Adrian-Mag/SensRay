@@ -337,7 +337,7 @@ class MeshEarthModel:
         max_depth_km: Optional[float] = None,
     ) -> np.ndarray:
         """Sample a TauP 1D property at given depths via linear interp."""
-        from sensray.core.earth_models import EarthModelManager
+        from sensray import EarthModelManager
 
         mgr = EarthModelManager()
         prof = mgr.get_1d_profile(

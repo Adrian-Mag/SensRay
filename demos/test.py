@@ -1,5 +1,4 @@
-from sensray.mesh.earth_model import MeshEarthModel
-from sensray.core.ray_paths import RayPathTracer
+from sensray import MeshEarthModel, RayPathTracer
 
 
 earth_mesh_model = MeshEarthModel.from_pygmsh_sphere(mesh_size_km=500)
