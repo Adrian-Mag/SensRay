@@ -938,6 +938,36 @@ class MeshEarthModel:
 
         plotter.add_points(pts, color=color, point_size=point_size)
 
+    def add_polyline(
+        self,
+        plotter: Any,
+        points_xyz: Union[
+            np.ndarray,
+            Iterable[Iterable[float]],
+            Dict[str, Any],
+        ],
+        color: str = "yellow",
+        line_width: float = 3.0,
+        as_tube: bool = False,
+        tube_radius: float = 10.0,
+    ) -> None:
+        """Overlay a polyline on an existing plotter.
+
+        Accepts the same inputs as add_points (arrays or dicts). The points
+        are normalized to (N,3). If as_tube is True, renders a tube for
+        better visibility.
+        """
+        if pv is None:  # pragma: no cover
+            raise ImportError("PyVista is required to plot polylines.")
+
+        pts = self._normalize_points_array(points_xyz)
+        if pts.shape[0] < 2:
+            return
+        # Build line connectivity
+        poly = pv.lines_from_points(pts, close=False)
+        geom = poly.tube(radius=tube_radius) if as_tube else poly
+        plotter.add_mesh(geom, color=color, line_width=line_width)
+
     def slice_great_circle(
         self,
         source_lat: float,
