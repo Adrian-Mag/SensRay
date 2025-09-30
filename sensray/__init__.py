@@ -12,6 +12,7 @@ This package provides comprehensive tools for seismic ray path analysis:
 Key Classes:
 - TravelTimeCalculator: Compute travel times for seismic phases
 - RayPathTracer: Extract and analyze ray paths with geographic coordinates
+- PlanetModel: 1D planetary models with seismic property profiles
 - EarthModelManager: Manage Earth models and plot velocity profiles
 - EarthPlotter: Create publication-quality 2D ray path visualizations
 - Earth3DVisualizer: Interactive 3D visualization
@@ -27,6 +28,7 @@ __author__ = "PhD Project"
 # Import unique functionality only
 from .visualization.earth_3d import Earth3DVisualizer
 from .mesh.earth_model import MeshEarthModel
+from .model.model import PlanetModel
 
 # Core API convenience exports
 from .core.travel_times import TravelTimeCalculator
@@ -37,6 +39,7 @@ from .visualization.earth_plots import EarthPlotter
 __all__ = [
     'Earth3DVisualizer',
     'MeshEarthModel',
+    'PlanetModel',
     'TravelTimeCalculator',
     'EarthModelManager',
     'RayPathTracer',
