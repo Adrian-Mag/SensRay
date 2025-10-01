@@ -1,0 +1,17 @@
+{
+  "mesh_type": "octree",
+  "planet_model_name": "PREM",
+  "planet_model_radius": 6371.0,
+  "generation_parameters": {},
+  "properties": [
+    "octreeLevel",
+    "index_cell_corner",
+    "vtkOriginalCellIds",
+    "region",
+    "vp",
+    "vs",
+    "rho"
+  ],
+  "n_cells": 672,
+  "n_points": 997
+}

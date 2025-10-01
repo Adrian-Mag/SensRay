@@ -439,6 +439,186 @@ class PlanetMesh:
 
         return lengths
 
+    # ===== Sensitivity Kernels =====
+
+    def compute_sensitivity_kernel(
+        self,
+        arrival: Any,
+        property_name: str,
+        attach_name: Optional[str] = None,
+        epsilon: float = 1e-6,
+        replace_existing: bool = True
+    ) -> np.ndarray:
+        """
+        Compute sensitivity kernel K = -L / (prop^2 + epsilon) per cell.
+
+        Parameters
+        ----------
+        arrival : obspy ray object or array-like
+            Ray object from TauP with path information, or array of
+            Cartesian points (N,3)
+        property_name : str
+            Name of seismic property ('vp', 'vs', 'rho', etc.)
+            Must exist in mesh.cell_data or will be populated from model
+        attach_name : str, optional
+            Name to store kernel as cell data. If None, uses f"K_{property_name}"
+        epsilon : float
+            Small regularizer added to denominator to avoid division by zero
+        replace_existing : bool
+            Whether to replace existing cell data with same name
+
+        Returns
+        -------
+        np.ndarray
+            Sensitivity kernel array (length n_cells)
+
+        Examples
+        --------
+        >>> rays = model.taupy_model.get_ray_paths_geo(..., phase_list=["P"])
+        >>> kernel = mesh.compute_sensitivity_kernel(rays[0], 'vp', attach_name='K_P')
+        >>> # Visualize with: mesh.plot_cross_section(property_name='K_P')
+        """
+        if self.mesh is None:
+            raise RuntimeError(
+                "No mesh generated. Call generate_*_mesh() first."
+            )
+
+        # Ensure property exists in cell data
+        if property_name not in self.mesh.cell_data:
+            self.populate_properties([property_name])
+
+        # Compute ray path lengths
+        lengths = self.compute_ray_lengths_from_arrival(
+            arrival, store_as=None, replace_existing=False
+        )
+
+        # Get property values (per cell)
+        prop = np.asarray(self.mesh.cell_data[property_name], dtype=float)
+
+        # Compute kernel: K = -L / (prop^2 + epsilon)
+        denom = prop * prop + float(epsilon)
+        valid = np.isfinite(denom) & (denom > 0.0)
+
+        kernel = np.zeros_like(lengths, dtype=float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            kernel[valid] = -lengths[valid] / denom[valid]
+
+        # Store as cell data if requested
+        if attach_name is None:
+            attach_name = f"K_{property_name}"
+
+        if attach_name in self.mesh.cell_data and not replace_existing:
+            raise ValueError(
+                f"Cell data '{attach_name}' already exists. "
+                "Set replace_existing=True to overwrite."
+            )
+
+        self.mesh.cell_data[attach_name] = kernel.astype(np.float32)
+        print(f"Stored sensitivity kernel as cell data: '{attach_name}'")
+
+        return kernel
+
+    def compute_sensitivity_kernels_for_rays(
+        self,
+        arrivals: List[Any],
+        property_name: str,
+        attach_name: Optional[str] = None,
+        accumulate: Optional[str] = "sum",
+        epsilon: float = 1e-6,
+        replace_existing: bool = True
+    ) -> np.ndarray:
+        """
+        Compute sensitivity kernels for multiple rays and optionally accumulate.
+
+        Parameters
+        ----------
+        arrivals : List[ray objects]
+            List of ray objects from TauP with path information
+        property_name : str
+            Name of seismic property ('vp', 'vs', 'rho', etc.)
+        attach_name : str, optional
+            Base name for storing kernels. If accumulate='sum', stores single
+            array. If accumulate=None, stores individual arrays with suffix.
+            If None, uses f"Ksum_{property_name}" or f"K_{property_name}_{{i}}"
+        accumulate : str or None
+            If "sum", return and store sum of all kernels.
+            If None, return (n_rays, n_cells) array and store individual kernels
+        epsilon : float
+            Small regularizer for denominator
+        replace_existing : bool
+            Whether to replace existing cell data
+
+        Returns
+        -------
+        np.ndarray
+            If accumulate='sum': 1D array (n_cells,) with summed kernels
+            If accumulate=None: 2D array (n_rays, n_cells)
+
+        Examples
+        --------
+        >>> rays = model.taupy_model.get_ray_paths_geo(..., phase_list=["P", "S"])
+        >>> # Sum all kernels
+        >>> Ksum = mesh.compute_sensitivity_kernels_for_rays(
+        ...     rays, 'vp', attach_name='Ksum_P_S')
+        >>> # Keep individual kernels
+        >>> K_all = mesh.compute_sensitivity_kernels_for_rays(
+        ...     rays, 'vp', accumulate=None, attach_name='K_ray')
+        """
+        if self.mesh is None:
+            raise RuntimeError(
+                "No mesh generated. Call generate_*_mesh() first."
+            )
+
+        # Ensure property exists once
+        if property_name not in self.mesh.cell_data:
+            self.populate_properties([property_name])
+
+        # Compute kernels for each ray (don't store individual kernels)
+        kernels = []
+        for i, arrival in enumerate(arrivals):
+            # Compute ray path lengths
+            lengths = self.compute_ray_lengths_from_arrival(
+                arrival, store_as=None, replace_existing=False
+            )
+
+            # Get property values (per cell)
+            prop = np.asarray(self.mesh.cell_data[property_name], dtype=float)
+
+            # Compute kernel: K = -L / (prop^2 + epsilon)
+            denom = prop * prop + float(epsilon)
+            valid = np.isfinite(denom) & (denom > 0.0)
+
+            kernel = np.zeros_like(lengths, dtype=float)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                kernel[valid] = -lengths[valid] / denom[valid]
+
+            kernels.append(kernel)
+
+        K_array = np.array(kernels)  # Shape: (n_rays, n_cells)
+
+        if accumulate == "sum":
+            Ksum = K_array.sum(axis=0)
+            name = attach_name or f"Ksum_{property_name}"
+            if name in self.mesh.cell_data and not replace_existing:
+                raise ValueError(
+                    f"Cell data '{name}' already exists. "
+                    "Set replace_existing=True to overwrite."
+                )
+            self.mesh.cell_data[name] = Ksum.astype(np.float32)
+            print(f"Stored summed sensitivity kernel as cell data: '{name}'")
+            return Ksum
+        else:
+            # Store individual kernels if attach_name provided
+            if attach_name is not None:
+                base_name = attach_name or f"K_{property_name}"
+                for i, kernel in enumerate(kernels):
+                    name = f"{base_name}_{i}"
+                    if name in self.mesh.cell_data and not replace_existing:
+                        continue  # Skip if exists and not replacing
+                    self.mesh.cell_data[name] = kernel.astype(np.float32)
+                print(f"Stored {len(kernels)} individual kernels with base name: '{base_name}_*'")
+            return K_array
+
     # ===== Visualization =====
 
     def plot_cross_section(self,
