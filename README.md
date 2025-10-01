@@ -72,6 +72,10 @@ Explore the package capabilities through interactive Jupyter notebooks:
 
 Run the demos: `jupyter notebook demos/00_index.ipynb`
 
+<p align="center">
+    <img src="docs/screenshot.png" width="800" alt="SensRay demo screenshot" />
+</p>
+
 ## Core Modules
 
 - **core.travel_times**: Travel time calculation with multiple Earth models
