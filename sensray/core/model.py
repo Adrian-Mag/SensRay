@@ -12,6 +12,9 @@ import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from matplotlib.axes import Axes
 import os
+import tempfile
+from obspy.taup import TauPyModel
+from obspy.taup.taup_create import build_taup_model
 
 
 class PlanetModel:
@@ -419,6 +422,54 @@ class PlanetModel:
             info['layers'].append(layer_info)
 
         return info
+
+    # ========== TauPy Integration ========== #
+
+    @property
+    def taupy_model(self) -> TauPyModel:
+        """
+        Lazily build or return a cached ObsPy TauPyModel for this
+        PlanetModel.
+
+        Behavior:
+        - If the model contains metadata with 'original_model', that
+          name is passed to TauPyModel(model=...) and returned.
+        - Otherwise, the PlanetModel's `nd_file_path` is used with
+          ObsPy's `build_taup_model` to create a model file in the
+          system temp directory, and a TauPyModel is loaded from that
+          file. The built model is cached on the instance as
+          `_taupy_model` to avoid rebuilding.
+
+        Raises
+        ------
+        ValueError
+            If the nd_file_path is missing or the file cannot be found.
+        """
+        # Return cached model if already built
+        if hasattr(self, '_taupy_model') and self._taupy_model is not None:
+            return self._taupy_model
+
+        metadata = getattr(self, 'metadata', {})
+        original_model = metadata.get('original_model')
+        if original_model:
+            self._taupy_model = TauPyModel(model=original_model)
+            return self._taupy_model
+
+        nd_path = getattr(self, 'nd_file_path', None)
+        if not nd_path or not os.path.exists(nd_path):
+            raise ValueError('PlanetModel must expose a valid nd_file_path')
+
+        model_name = os.path.splitext(os.path.basename(nd_path))[0]
+        try:
+            build_taup_model(nd_path, output_folder=tempfile.gettempdir())
+        except Exception:
+            # Let TauPy/TaupCreate raise more informative errors; wrap if
+            # desired for friendly messaging.
+            raise
+
+        model_path = os.path.join(tempfile.gettempdir(), f"{model_name}.npz")
+        self._taupy_model = TauPyModel(model=model_path)
+        return self._taupy_model
 
     def get_layer_info(self) -> List[Dict[str, Any]]:
         """
