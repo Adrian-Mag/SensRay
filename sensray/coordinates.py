@@ -219,6 +219,39 @@ class CoordinateConverter:
         return x, y, z
 
     @staticmethod
+    def compute_gc_plane_normal(
+        lat1_deg: float,
+        lon1_deg: float,
+        lat2_deg: float,
+        lon2_deg: float,
+        radius_km: float = 6371.0,
+    ) -> Tuple[float, float, float]:
+        """
+        Compute a unit normal vector (x, y, z) to the great-circle plane
+        defined by two geographic points (lat1, lon1) and (lat2, lon2).
+
+        The normal is the cross product of the two position vectors from
+        the center of the Earth to the surface points. Returns a 3-tuple.
+        """
+        a_x, a_y, a_z = CoordinateConverter.earth_to_cartesian(
+            lat1_deg, lon1_deg, depth=0.0, earth_radius=radius_km
+        )
+        b_x, b_y, b_z = CoordinateConverter.earth_to_cartesian(
+            lat2_deg, lon2_deg, depth=0.0, earth_radius=radius_km
+        )
+
+        a = np.array((a_x, a_y, a_z), dtype=float)
+        b = np.array((b_x, b_y, b_z), dtype=float)
+
+        n = np.cross(a, b)
+        norm = np.linalg.norm(n)
+        if norm == 0:
+            raise ValueError(
+                "Points are co-linear or identical; normal is undefined"
+            )
+        return tuple((n / norm).tolist())
+
+    @staticmethod
     def validate_coordinates(lat: float, lon: float) -> bool:
         """
         Validate latitude and longitude coordinates.

@@ -5,7 +5,7 @@ import numpy as np
 import discretize
 import pyvista as pv
 from obspy.taup import TauPyModel
-from sensray.utils.coordinates import CoordinateConverter
+from sensray.coordinates import CoordinateConverter
 
 # ---- params ----
 R = 6371.0       # target sphere radius (km) to extract

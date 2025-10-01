@@ -1,5 +1,5 @@
 import pytest
-from sensray.core.model import PlanetModel
+from sensray.model import PlanetModel
 
 
 def test_list_and_load_standard_model():

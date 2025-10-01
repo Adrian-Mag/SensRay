@@ -15,6 +15,7 @@ import os
 import tempfile
 from obspy.taup import TauPyModel
 from obspy.taup.taup_create import build_taup_model
+import warnings
 
 
 class PlanetModel:
@@ -104,7 +105,7 @@ class PlanetModel:
         """
         # Get the directory where this module is located
         module_dir = os.path.dirname(os.path.abspath(__file__))
-        models_dir = os.path.join(module_dir, '..', 'models')
+        models_dir = os.path.join(module_dir, 'models')
         models_dir = os.path.normpath(models_dir)
 
         # Handle common aliases and case variations
@@ -150,7 +151,7 @@ class PlanetModel:
         """
         # Get the directory where this module is located
         module_dir = os.path.dirname(os.path.abspath(__file__))
-        models_dir = os.path.join(module_dir, '..', 'models')
+        models_dir = os.path.join(module_dir, 'models')
         models_dir = os.path.normpath(models_dir)
 
         available_models = []
@@ -621,3 +622,81 @@ class PlanetModel:
 
         plt.tight_layout()
         return fig, ax
+
+    # ===== Mesh Integration =====
+
+    @property
+    def mesh(self):
+        """
+        Lazy-loaded mesh property.
+
+        Returns
+        -------
+        PlanetMesh
+            Mesh representation of this planet model
+        """
+        if not hasattr(self, '_mesh') or self._mesh is None:
+            from .planet_mesh import PlanetMesh
+            self._mesh = PlanetMesh(self)
+        return self._mesh
+
+    def create_mesh(
+        self,
+        mesh_type: str = "octree",
+        from_file: Optional[str] = None,
+        populate_properties: Optional[List[str]] = None,
+        **kwargs
+    ):
+        """
+        Create a mesh with specific configuration or load from file.
+
+        Parameters
+        ----------
+        mesh_type : str
+            Type of mesh to create: "octree" or "tetrahedral".
+            Ignored if from_file is provided.
+        from_file : str, optional
+            Path to load pre-saved mesh from (without extension).
+            If provided, loads mesh from {from_file}.vtu and
+            {from_file}_metadata.json instead of generating new mesh.
+        **kwargs
+            Additional arguments passed to mesh generation.
+            Ignored if from_file is provided.
+
+        Returns
+        -------
+        PlanetMesh
+            Configured mesh instance
+
+        Examples
+        --------
+        >>> # Generate new mesh
+        >>> mesh = model.create_mesh("octree", base_cells=64)
+        >>>
+        >>> # Load pre-saved mesh
+        >>> mesh = model.create_mesh(from_file="saved_earth_mesh")
+        """
+        from .planet_mesh import PlanetMesh
+
+        if from_file is not None:
+            # Load mesh from file
+            self._mesh = PlanetMesh.from_file(from_file, planet_model=self)
+        else:
+            # Generate new mesh
+            self._mesh = PlanetMesh(self, mesh_type=mesh_type)
+
+            if mesh_type == "octree":
+                self._mesh.generate_octree_mesh(**kwargs)
+            elif mesh_type == "tetrahedral":
+                self._mesh.generate_tetrahedral_mesh(**kwargs)
+            else:
+                raise ValueError(f"Unknown mesh type: {mesh_type}")
+
+        # Optionally populate properties (after generation or load)
+        if populate_properties:
+            try:
+                self._mesh.populate_properties(populate_properties)
+            except Exception as e:
+                warnings.warn(f"Failed to populate properties: {e}")
+
+        return self._mesh
