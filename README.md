@@ -63,14 +63,18 @@ plt.show()
 
 ## Demos
 
-Explore the package capabilities through interactive Jupyter notebooks:
+Explore the package capabilities through concise interactive Jupyter notebooks (found in `demos/`):
 
-- **[01_basic_travel_times.ipynb](demos/01_basic_travel_times.ipynb)**: Start here! Learn travel time calculations and Earth models
-- **[02_ray_path_visualization.ipynb](demos/02_ray_path_visualization.ipynb)**: Extract and visualize ray paths in 2D cross-sections
-- **[03_earth_model_comparison.ipynb](demos/03_earth_model_comparison.ipynb)**: Compare IASP91, PREM, and AK135 models.
-- **[04_3d_plots.ipynb](demos/04_3d_plots.ipynb)**: Interactive 3D visualization with PyVista
+- **[01_basic_usage.ipynb](demos/01_basic_usage.ipynb)** — basic usage: load a 1D Earth model, create a tetrahedral mesh, populate simple properties and visualize them.
+- **[02_ray_tracing_kernels.ipynb](demos/02_ray_tracing_kernels.ipynb)** — ray tracing and sensitivity kernels: compute per-cell ray lengths and sensitivity kernels, visualize and save results.
 
-Run the demos: `jupyter notebook demos/00_index.ipynb`
+There are also pre-generated demo mesh files in `demos/` (VTU + metadata): `prem_tet_demo.vtu`, `prem_tet_rays_kernels_demo.vtu`.
+
+Run the demos locally with Jupyter, for example:
+
+```
+jupyter notebook demos/01_basic_usage.ipynb
+```
 
 <p align="center">
     <img src="docs/screenshot.png" width="800" alt="SensRay demo screenshot" />
@@ -84,6 +88,11 @@ Run the demos: `jupyter notebook demos/00_index.ipynb`
 - **visualization.earth_plots**: Circular Earth cross-sections and ray plotting
 - **visualization.earth_3d**: Interactive 3D visualization with PyVista
 - **kernels.sensitivity**: NOT DONE!
+- **kernels.sensitivity**: Basic sensitivity-kernel helpers are implemented on `PlanetMesh` (see `demos/02_ray_tracing_kernels.ipynb`).
+
+What's new
+-- Tetrahedral-only demo notebooks and mesh export (no octree examples in demos).
+-- Per-ray and multi-ray sensitivity kernel computation implemented and exposed on `PlanetMesh`.
 
 ## Dependencies
 
