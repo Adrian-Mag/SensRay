@@ -5,25 +5,122 @@ Ray path tracing and analysis functionality.
 import numpy as np
 from typing import List, Dict, Tuple, Optional
 from obspy.taup import TauPyModel
+from obspy.taup.taup_create import build_taup_model
 from obspy.geodetics import gps2dist_azimuth, locations2degrees
+import tempfile
+import os
 
 
 class RayPathTracer:
     """
-    Class for computing and analyzing seismic ray paths through Earth models.
+    Class for computing and analyzing seismic ray paths through planetary
+    models.
+
+    The ray tracer now works exclusively with PlanetModel instances, which
+    handle all model file I/O and provide a unified interface for both
+    standard Earth models and custom planetary models.
     """
 
-    def __init__(self, model_name: str = "iasp91"):
+    def __init__(self, planet_model):
         """
-        Initialize the ray path tracer.
+        Initialize the ray path tracer with a PlanetModel.
+
+        Parameters
+        ----------
+        planet_model : PlanetModel
+            The planetary model instance to use for ray tracing
+        """
+        from .model import PlanetModel
+
+        if not isinstance(planet_model, PlanetModel):
+            raise TypeError("planet_model must be a PlanetModel instance")
+
+        self.planet_model = planet_model
+        self.temp_nd_file = None
+
+        # Create TauP model from PlanetModel
+        self.model = self._create_taup_model_from_planet_model()
+
+    def _create_taup_model_from_planet_model(self) -> TauPyModel:
+        """Create a TauP model from the PlanetModel instance."""
+        # Check if we need to create a standard Earth model
+        metadata = getattr(self.planet_model, 'metadata', {})
+        if metadata.get('source') == 'obspy_taup':
+            # This is already a standard Earth model, use directly
+            original_model = metadata.get('original_model', 'prem')
+            return TauPyModel(model=original_model)
+
+        # For custom models, create temporary .nd file
+        self.temp_nd_file = self.planet_model.create_temp_nd_file()
+
+        # Build TauP model from the .nd file
+        model_name = self.planet_model.name.replace(' ', '_').lower()
+        build_taup_model(
+            self.temp_nd_file,
+            output_folder=tempfile.gettempdir()
+        )
+
+        # Load the built model
+        model_path = os.path.join(
+            tempfile.gettempdir(),
+            f"{model_name}.npz"
+        )
+        return TauPyModel(model=model_path)
+
+    @classmethod
+    def from_standard_model(cls, model_name: str = "prem"):
+        """
+        Create RayPathTracer from a standard Earth model.
 
         Parameters
         ----------
         model_name : str
-            Name of the Earth model to use
+            Name of standard Earth model ('prem', 'iasp91', 'ak135')
+
+        Returns
+        -------
+        RayPathTracer
+            Tracer configured with the standard Earth model
         """
-        self.model_name = model_name
-        self.model = TauPyModel(model=model_name)
+        from .model import PlanetModel
+
+        planet_model = PlanetModel.from_standard_model(model_name)
+        return cls(planet_model)
+
+    @classmethod
+    def from_nd_file(cls, filepath: str, name: Optional[str] = None):
+        """
+        Create RayPathTracer from a .nd format file.
+
+        Parameters
+        ----------
+        filepath : str
+            Path to the .nd format file
+        name : str, optional
+            Name for the model
+
+        Returns
+        -------
+        RayPathTracer
+            Tracer configured with the model from file
+        """
+        from .model import PlanetModel
+
+        planet_model = PlanetModel.from_nd_file(filepath, name)
+        return cls(planet_model)
+
+    def cleanup(self):
+        """Clean up temporary files."""
+        if self.temp_nd_file and os.path.exists(self.temp_nd_file):
+            try:
+                os.unlink(self.temp_nd_file)
+                self.temp_nd_file = None
+            except OSError:
+                pass  # File might already be cleaned up
+
+    def __del__(self):
+        """Destructor to clean up temporary files."""
+        self.cleanup()
 
     def get_ray_paths(
         self,

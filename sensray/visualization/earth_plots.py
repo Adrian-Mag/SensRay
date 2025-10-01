@@ -2,24 +2,84 @@
 Earth visualization and plotting functionality.
 """
 
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
+from matplotlib.axes import Axes
 
-from ..core.earth_models import EarthModelManager
+from ..core.model import PlanetModel
 
 
 class EarthPlotter:
-    """Class for creating Earth visualizations and ray path plots."""
+    """Class for creating Earth visualizations and ray path plots.
 
-    def __init__(self, model_name: str = "iasp91") -> None:
-        self.model_name = model_name
-        self.model_manager = EarthModelManager()
-        self.earth_structure = self.model_manager.get_earth_structure(
-            model_name
-        )
+    This class creates 2D cross-sectional visualizations of planetary models
+    with seismic ray paths, showing sources, receivers, and ray trajectories
+    through the planet's internal structure.
+    """
+
+    def __init__(
+        self,
+        planet_model: Optional[PlanetModel] = None
+    ) -> None:
+        """
+        Initialize the EarthPlotter.
+
+        Parameters
+        ----------
+        planet_model : PlanetModel, optional
+            A PlanetModel instance to use for visualization. If None,
+            will attempt to create a simple Earth model.
+        """
+        if planet_model is not None:
+            self.planet_model = planet_model
+        else:
+            # Try to create from standard model first
+            try:
+                self.planet_model = PlanetModel.from_standard_model("iasp91")
+            except (ImportError, Exception):
+                # Fallback to simple Earth model
+                self.planet_model = PlanetModel.create_simple_earth(
+                    name="Simple Earth"
+                )
+
+        # Extract structure parameters from the planet model
+        self.earth_structure = self._get_structure_from_model()
+
+    def _get_structure_from_model(self) -> Dict:
+        """Extract structure parameters from the planet model."""
+        radius = self.planet_model.radius
+
+        # Get discontinuities as depths
+        discontinuities = self.planet_model.get_discontinuities(as_depths=True)
+
+        # Set default values for Earth-like structure
+        cmb_depth = 2891.0
+        icb_depth = 5150.0
+
+        # Try to find CMB and ICB from discontinuities if available
+        # Look for discontinuities close to typical Earth values
+        for disc_depth in discontinuities:
+            if 2800 <= disc_depth <= 3000:  # CMB range
+                cmb_depth = disc_depth
+            elif 5000 <= disc_depth <= 5300:  # ICB range
+                icb_depth = disc_depth
+
+        return {
+            'earth_radius': radius,
+            'cmb_radius': radius - cmb_depth,
+            'icb_radius': radius - icb_depth,
+            'surface_depth': 0.0,
+            'cmb_depth': cmb_depth,
+            'icb_depth': icb_depth,
+            'boundaries': {
+                'surface': 0.0,
+                'cmb': cmb_depth,
+                'icb': icb_depth
+            }
+        }
 
     def plot_circular_earth(
         self,
@@ -108,7 +168,7 @@ class EarthPlotter:
 
     def _fill_earth_layers(
         self,
-        ax: plt.Axes,
+        ax: Axes,
         theta_full: np.ndarray,
         earth_radius: float,
         cmb_radius: float,
@@ -152,7 +212,7 @@ class EarthPlotter:
 
     def _plot_earth_boundaries(
         self,
-        ax: plt.Axes,
+        ax: Axes,
         theta: np.ndarray,
         earth_radius: float,
         cmb_radius: float,
@@ -183,7 +243,7 @@ class EarthPlotter:
             label="Inner Core Boundary",
         )
 
-    def _plot_ray_paths(self, ax: plt.Axes, ray_coordinates: Dict) -> None:
+    def _plot_ray_paths(self, ax: Axes, ray_coordinates: Dict) -> None:
         colors = [
             "blue", "red", "green", "purple",
             "brown", "pink", "gray", "cyan",
@@ -206,7 +266,7 @@ class EarthPlotter:
 
     def _mark_source_receiver(
         self,
-        ax: plt.Axes,
+        ax: Axes,
         source_depth: float,
         distance_deg: float,
         earth_radius: float,
@@ -234,7 +294,7 @@ class EarthPlotter:
         )
 
     def _add_distance_arc(
-        self, ax: plt.Axes, distance_deg: float, earth_radius: float
+        self, ax: Axes, distance_deg: float, earth_radius: float
     ) -> None:
         angle = np.deg2rad(distance_deg)
         arc_angles = np.linspace(0.0, angle, 50)
@@ -258,7 +318,7 @@ class EarthPlotter:
 
     def _format_earth_plot(
         self,
-        ax: plt.Axes,
+        ax: Axes,
         source_depth: float,
         distance_deg: float,
         earth_radius: float,
@@ -273,9 +333,8 @@ class EarthPlotter:
         ax.set_xlabel("Distance (km)")
         ax.set_ylabel("Height (km)")
         ax.set_title(
-            "Seismic Ray Paths Through Earth\n"
-            f"Source: {source_depth} km depth, Distance: {distance_deg}°, "
-            f"Model: {self.model_name.upper()}\n"
+            f"Seismic Ray Paths Through {self.planet_model.name}\n"
+            f"Source: {source_depth} km depth, Distance: {distance_deg}°\n"
             f"View: {'Full' if view=='full' else 'Upper hemisphere'}"
         )
         ax.legend(bbox_to_anchor=(1.05, 1.0), loc="upper left")
@@ -283,44 +342,12 @@ class EarthPlotter:
         ax.text(
             0.0,
             -earth_radius * 0.1,
-            "Center of Earth",
+            f"Center of {self.planet_model.name}",
             ha="center",
             va="center",
             fontsize=10,
             style="italic",
         )
-
-    def plot_travel_time_curves(
-        self,
-        travel_time_table: Dict,
-        source_depth: float,
-        fig_size: Tuple[int, int] = (12, 8),
-    ) -> Figure:
-        fig, ax = plt.subplots(figsize=fig_size)
-        distances = travel_time_table["distances"]
-        for phase, times in travel_time_table.items():
-            if phase == "distances":
-                continue
-            mask = ~np.isnan(times)
-            if np.any(mask):
-                ax.plot(
-                    distances[mask],
-                    times[mask],
-                    "o-",
-                    label=phase,
-                    markersize=4,
-                    linewidth=2,
-                )
-        ax.set_xlabel("Distance (degrees)")
-        ax.set_ylabel("Travel Time (seconds)")
-        ax.set_title(
-            "Travel Time Curves\n"
-            f"Source depth: {source_depth} km, Model: "
-            f"{self.model_name.upper()}"
-        )
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-        return fig
 
     def plot_pierce_points(
         self,
@@ -349,29 +376,6 @@ class EarthPlotter:
             ax.grid(True, alpha=0.3)
         axes[-1].set_xlabel("Distance (degrees)")
         fig.suptitle(
-            f"Pierce Point Analysis - Model: {self.model_name.upper()}"
+            f"Pierce Point Analysis - Model: {self.planet_model.name}"
         )
-        return fig
-
-    def plot_model_comparison(
-        self,
-        comparison_data: Dict,
-        fig_size: Tuple[int, int] = (10, 6),
-    ) -> Figure:
-        fig, ax = plt.subplots(figsize=fig_size)
-        models = list(comparison_data.keys())
-        times = [comparison_data[m] for m in models]
-        bars = ax.bar(models, times, alpha=0.7)
-        for bar, t in zip(bars, times):
-            if not np.isnan(t):
-                ax.text(
-                    bar.get_x() + bar.get_width() / 2,
-                    bar.get_height() + 1.0,
-                    f"{t:.2f}s",
-                    ha="center",
-                    va="bottom",
-                )
-        ax.set_ylabel("Travel Time (seconds)")
-        ax.set_title("Travel Time Comparison Between Earth Models")
-        ax.grid(True, alpha=0.3, axis="y")
         return fig

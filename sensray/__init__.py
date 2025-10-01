@@ -26,22 +26,31 @@ __version__ = "0.3.0"
 __author__ = "PhD Project"
 
 # Import unique functionality only
-from .visualization.earth_3d import Earth3DVisualizer
-from .mesh.earth_model import MeshEarthModel
-from .model.model import PlanetModel
+# Earth3DVisualizer requires PyVista - import only if available
+try:
+    from .visualization.earth_3d import Earth3DVisualizer
+    _has_earth3d = True
+except ImportError:
+    _has_earth3d = False
 
-# Core API convenience exports
-from .core.travel_times import TravelTimeCalculator
-from .core.earth_models import EarthModelManager
-from .core.ray_paths import RayPathTracer
+from .mesh.earth_model import MeshEarthModel
+from .core.model import PlanetModel
+
+# Core API convenience exports (these may require ObsPy)
+try:
+    from .core.travel_times import TravelTimeCalculator
+    from .core.ray_paths import RayPathTracer
+    _has_core = True
+except ImportError:
+    _has_core = False
+
 from .visualization.earth_plots import EarthPlotter
 
-__all__ = [
-    'Earth3DVisualizer',
-    'MeshEarthModel',
-    'PlanetModel',
-    'TravelTimeCalculator',
-    'EarthModelManager',
-    'RayPathTracer',
-    'EarthPlotter',
-]
+# Dynamic __all__ based on available imports
+__all__ = ['MeshEarthModel', 'PlanetModel', 'EarthPlotter']
+
+if _has_earth3d:
+    __all__.append('Earth3DVisualizer')
+
+if _has_core:
+    __all__.extend(['TravelTimeCalculator', 'RayPathTracer'])
