@@ -1,9 +1,0 @@
-{
-  "mesh_type": "tetrahedral",
-  "planet_model_name": "PREM",
-  "planet_model_radius": 6371.0,
-  "generation_parameters": {},
-  "properties": [],
-  "n_cells": 46781,
-  "n_points": 7993
-}
