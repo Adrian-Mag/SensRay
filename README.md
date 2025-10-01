@@ -1,4 +1,4 @@
-```markdown
+
 # SensRay
 
 Lightweight utilities for building planet (1D) models, generating meshes, computing per-cell ray path lengths and simple sensitivity kernels. SensRay intentionally provides a small, stable public API and delegates ray tracing to ObsPy/TauP and 3D rendering to PyVista.
