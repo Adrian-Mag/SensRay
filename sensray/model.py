@@ -642,7 +642,7 @@ class PlanetModel:
 
     def create_mesh(
         self,
-        mesh_type: str = "octree",
+        mesh_type: str = "tetrahedral",
         from_file: Optional[str] = None,
         populate_properties: Optional[List[str]] = None,
         **kwargs
@@ -653,7 +653,7 @@ class PlanetModel:
         Parameters
         ----------
         mesh_type : str
-            Type of mesh to create: "octree" or "tetrahedral".
+            Type of mesh to create: "tetrahedral".
             Ignored if from_file is provided.
         from_file : str, optional
             Path to load pre-saved mesh from (without extension).
@@ -671,7 +671,7 @@ class PlanetModel:
         Examples
         --------
         >>> # Generate new mesh
-        >>> mesh = model.create_mesh("octree", base_cells=64)
+        >>> mesh = model.create_mesh("tetrahedral", mesh_size_km=100)
         >>>
         >>> # Load pre-saved mesh
         >>> mesh = model.create_mesh(from_file="saved_earth_mesh")
@@ -685,12 +685,13 @@ class PlanetModel:
             # Generate new mesh
             self._mesh = PlanetMesh(self, mesh_type=mesh_type)
 
-            if mesh_type == "octree":
-                self._mesh.generate_octree_mesh(**kwargs)
-            elif mesh_type == "tetrahedral":
+            if mesh_type == "tetrahedral":
                 self._mesh.generate_tetrahedral_mesh(**kwargs)
             else:
-                raise ValueError(f"Unknown mesh type: {mesh_type}")
+                raise ValueError(
+                    f"Unknown mesh type: {mesh_type}. "
+                    "Only 'tetrahedral' is supported."
+                )
 
         # Optionally populate properties (after generation or load)
         if populate_properties:
