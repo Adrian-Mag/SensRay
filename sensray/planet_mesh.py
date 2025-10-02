@@ -2,7 +2,7 @@
 PlanetMesh class for SensRay.
 
 Provides mesh generation and visualization for PlanetModel instances.
-Supports octree and tetrahedral mesh generation with discontinuity-aware
+Supports tetrahedral mesh generation with discontinuity-aware
 refinement and unified visualization methods.
 """
 
@@ -17,10 +17,8 @@ import warnings
 
 try:  # Optional heavy deps
     import pyvista as pv
-    import discretize
 except Exception as exc:  # pragma: no cover - optional
     pv = None  # type: ignore[assignment]
-    discretize = None  # type: ignore[assignment]
     _mesh_err = exc  # noqa: F841
 
 
@@ -28,7 +26,7 @@ class PlanetMesh:
     """
     Mesh representation of a PlanetModel.
 
-    Handles octree and tetrahedral mesh generation based on model
+    Handles tetrahedral mesh generation based on model
     discontinuities, property mapping from model to mesh cells,
     and unified visualization with plane-based clipping.
 
@@ -37,112 +35,32 @@ class PlanetMesh:
     planet_model : PlanetModel
         The planet model to create a mesh for
     mesh_type : str
-        Type of mesh to generate: "octree" or "tetrahedral"
+        Type of mesh to generate: "tetrahedral"
 
     Examples
     --------
     >>> model = PlanetModel.from_standard_model("prem")
     >>> mesh = PlanetMesh(model)
-    >>> mesh.generate_octree_mesh()
+    >>> mesh.generate_tetrahedral_mesh()
     >>> mesh.populate_properties(["vp", "vs"])
     >>> mesh.plot_cross_section(property_name="vp")
     """
 
-    def __init__(self, planet_model, mesh_type: str = "octree"):
-        if pv is None or discretize is None:  # pragma: no cover
+    def __init__(self, planet_model, mesh_type: str = "tetrahedral"):
+        if pv is None:  # pragma: no cover
             raise ImportError(
-                "PyVista and discretize are required for mesh operations. "
-                "Install with `pip install pyvista discretize`."
+                "PyVista is required for mesh operations. "
+                "Install with `pip install pyvista`."
             )
+
+        if mesh_type != "tetrahedral":
+            raise ValueError("Only tetrahedral mesh type is supported")
 
         self.planet_model = planet_model
         self.mesh_type = mesh_type
         self.mesh = None  # PyVista UnstructuredGrid
-        self._tree_mesh = None  # discretize.TreeMesh (for octree only)
 
     # ===== Mesh Generation =====
-
-    def generate_octree_mesh(self,
-                             base_cells: int = 256,
-                             max_level: Optional[int] = None,
-                             buffer_km: float = 2500.0,
-                             refinement_levels: Optional[Dict[float, int]] = None
-                             ) -> None:
-        """
-        Generate octree mesh based on user-defined depth ranges.
-
-        Parameters
-        ----------
-        base_cells : int
-            Base number of cells per axis (should be power of 2)
-        max_level : int, optional
-            Maximum refinement level. If None, uses log2(base_cells)
-        buffer_km : float
-            Buffer zone around planet to avoid boundary artifacts
-        refinement_levels : dict, optional
-            Custom refinement levels for depth ranges.
-            Keys are depths in km from surface (float), values are refinement levels (int).
-            Example: {0: 6, 50: 5, 670: 4, 2891: 4} for Earth-like structure.
-            If None, uses reasonable Earth-like defaults.
-        """
-        if discretize is None:
-            raise ImportError(
-                "discretize is required for octree mesh generation"
-            )
-
-        radius = self.planet_model.radius
-        domain_size = radius + buffer_km
-
-        if max_level is None:
-            max_level = int(np.log2(base_cells))
-
-        # Create base mesh
-        hx = [(2 * domain_size / base_cells, base_cells)]
-        tree_mesh = discretize.TreeMesh(
-            [hx, hx, hx],
-            origin=(-domain_size, -domain_size, -domain_size),
-            diagonal_balance=True,
-        )
-
-        # Generate shells from discontinuities
-        shells = self._generate_discontinuity_shells(
-            max_level, buffer_km, refinement_levels
-        )
-
-        # Refine using shell-based callable
-        def shell_level(cell):
-            cx, cy, cz = cell.center
-            r = (cx*cx + cy*cy + cz*cz)**0.5
-            for name, rad, level in shells:
-                if r <= rad:
-                    return int(level)
-            return 0  # outside all shells
-
-        tree_mesh.refine(shell_level)
-        tree_mesh.finalize()
-
-        # Convert to PyVista and extract cells inside planet
-        grid_all = pv.wrap(tree_mesh.to_vtk())
-        centers = grid_all.cell_centers().points
-        r_all = np.linalg.norm(centers, axis=1)
-        inside = r_all <= radius
-        idx = np.where(inside)[0]
-
-        self.mesh = grid_all.extract_cells(idx)
-        self._tree_mesh = tree_mesh
-
-        # Add region labels
-        centers_in = self.mesh.cell_centers().points
-        r_in = np.linalg.norm(centers_in, axis=1)
-        regions = np.array(
-            [self._get_shell_index(r, shells) for r in r_in], dtype=np.int32
-        )
-        self.mesh.cell_data["region"] = regions
-
-        print(
-            f"Generated octree mesh: {self.mesh.n_cells} cells, "
-            f"{self.mesh.n_points} points"
-        )
 
     def generate_tetrahedral_mesh(self,
                                   mesh_size_km: float = 200.0,
@@ -258,11 +176,8 @@ class PlanetMesh:
 
         path_points = np.array(path_points)
 
-        # Compute per-cell intersections
-        if self.mesh_type == "octree":
-            return self._compute_polyline_cell_lengths_octree(path_points)
-        else:
-            return self._compute_polyline_cell_lengths_tetrahedral(path_points)
+        # Compute per-cell intersections using tetrahedral method
+        return self._compute_polyline_cell_lengths_tetrahedral(path_points)
 
     def compute_multiple_ray_lengths(self, rays: List[Any]) -> np.ndarray:
         """
@@ -367,11 +282,8 @@ class PlanetMesh:
 
         path_points = np.array(path_points)
 
-        # Compute per-cell intersections using appropriate method
-        if self.mesh_type == "octree":
-            lengths = self._compute_polyline_cell_lengths_octree(path_points)
-        else:
-            lengths = self._compute_polyline_cell_lengths_tetrahedral(path_points)
+        # Compute per-cell intersections using tetrahedral method
+        lengths = self._compute_polyline_cell_lengths_tetrahedral(path_points)
 
         # Store as cell data if requested
         if store_as is not None:
@@ -821,87 +733,7 @@ class PlanetMesh:
 
     # ===== Private Helper Methods =====
 
-    def _generate_discontinuity_shells(self,
-                                     max_level: int,
-                                     buffer_km: float,
-                                     refinement_levels: Optional[Dict[float, int]] = None) -> List[Tuple[str, float, int]]:
-        """
-        Generate shell specifications from user-defined depth ranges.
 
-        Parameters
-        ----------
-        max_level : int
-            Maximum refinement level allowed
-        buffer_km : float
-            Buffer zone around planet
-        refinement_levels : dict, optional
-            Dictionary with depth_km -> refinement_level mapping.
-            Keys are depths in km from surface, values are refinement levels.
-            Example: {0: 6, 50: 5, 670: 4, 2891: 4}
-
-        Returns
-        -------
-        List[Tuple[str, float, int]]
-            List of (name, radius_km, refinement_level) tuples
-        """
-        radius = self.planet_model.radius
-        shells = []
-
-        if refinement_levels is None:
-            # Default depth-based refinement (Earth-like but user can override)
-            refinement_levels = {
-                0: 6,      # surface to 50km: fine (crust)
-                50: 5,     # 50-670km: medium (upper mantle)
-                670: 4,    # 670-2891km: coarse (lower mantle)
-                2891: 4,   # 2891-5150km: coarse (outer core)
-                5150: 3    # 5150km+: very coarse (inner core)
-            }
-
-        # Sort depths from surface to center
-        sorted_depths = sorted(refinement_levels.keys())
-
-        for i, depth_km in enumerate(sorted_depths):
-            level = min(refinement_levels[depth_km], max_level)
-            radius_km = radius - depth_km
-
-            # Ensure radius is positive (don't go below center)
-            if radius_km <= 0:
-                radius_km = 0.1  # small positive value near center
-
-            shell_name = f"depth_{depth_km:.0f}km_level_{level}"
-            shells.append((shell_name, radius_km, level))
-
-        # Add buffer zone with same level as outermost shell
-        buffer_radius = radius + buffer_km
-        buffer_level = shells[-1][2] if shells else 3
-        shells.append(("buffer", buffer_radius, buffer_level))
-
-        return shells
-
-    def _get_shell_index(self, r: float, shells: List[Tuple[str, float, int]]) -> int:
-        """Get shell index for given radius."""
-        for i, (name, rad, level) in enumerate(shells):
-            if r <= rad:
-                return i
-        return len(shells) - 1
-
-    def _compute_polyline_cell_lengths_octree(self, points: np.ndarray) -> np.ndarray:
-        """Compute per-cell lengths for octree mesh using AABB intersection."""
-        if len(points) < 2:
-            return np.zeros(self.mesh.n_cells, dtype=float)
-
-        lengths = np.zeros(self.mesh.n_cells, dtype=float)
-
-        # Get cell bounds for vectorized intersection
-        cell_bounds = self._get_cell_bounds()
-
-        # Compute intersection for each segment
-        for i in range(len(points) - 1):
-            p0, p1 = points[i], points[i + 1]
-            segment_lengths = self._aabb_segment_length_vectorized(cell_bounds, p0, p1)
-            lengths += segment_lengths
-
-        return lengths
 
     def _compute_polyline_cell_lengths_tetrahedral(self, points: np.ndarray) -> np.ndarray:
         """Compute per-cell lengths for tetrahedral mesh using VTK locator."""
@@ -911,87 +743,7 @@ class PlanetMesh:
         # Use internal tetrahedral implementation
         return self._compute_ray_cell_path_lengths_internal(points)
 
-    def _get_cell_bounds(self) -> np.ndarray:
-        """Get AABB bounds for all cells."""
-        if self.mesh is None:
-            raise RuntimeError("No mesh generated. Call generate_*_mesh() first.")
 
-        n_cells = self.mesh.n_cells
-        bounds = np.empty((n_cells, 6), dtype=float)
-
-        for i in range(n_cells):
-            cell = self.mesh.get_cell(i)
-            point_ids = np.array(cell.point_ids, dtype=int)
-            coords = self.mesh.points[point_ids]
-
-            bounds[i, 0] = coords[:, 0].min()  # xmin
-            bounds[i, 1] = coords[:, 0].max()  # xmax
-            bounds[i, 2] = coords[:, 1].min()  # ymin
-            bounds[i, 3] = coords[:, 1].max()  # ymax
-            bounds[i, 4] = coords[:, 2].min()  # zmin
-            bounds[i, 5] = coords[:, 2].max()  # zmax
-
-        return bounds
-
-    def _aabb_segment_length_vectorized(
-        self, bounds: np.ndarray, p0: np.ndarray, p1: np.ndarray
-    ) -> np.ndarray:
-        """Vectorized AABB-segment intersection."""
-        p0 = np.asarray(p0, dtype=float)
-        p1 = np.asarray(p1, dtype=float)
-        d = p1 - p0
-        seg_len = float(np.linalg.norm(d))
-
-        if seg_len == 0.0:
-            return np.zeros(bounds.shape[0], dtype=float)
-
-        # Unpack bounds
-        xmin, xmax = bounds[:, 0], bounds[:, 1]
-        ymin, ymax = bounds[:, 2], bounds[:, 3]
-        zmin, zmax = bounds[:, 4], bounds[:, 5]
-
-        # Slab method intersection
-        tmin = np.zeros_like(xmin)
-        tmax = np.ones_like(xmin)
-
-        # X axis
-        if d[0] != 0.0:
-            tx1 = (xmin - p0[0]) / d[0]
-            tx2 = (xmax - p0[0]) / d[0]
-            tmin = np.maximum(tmin, np.minimum(tx1, tx2))
-            tmax = np.minimum(tmax, np.maximum(tx1, tx2))
-        else:
-            # Parallel to x-axis: use half-open inclusion
-            mask = (xmin <= p0[0]) & (p0[0] < xmax)
-            tmax = np.where(mask, tmax, 0.0)
-
-        # Y axis
-        if d[1] != 0.0:
-            ty1 = (ymin - p0[1]) / d[1]
-            ty2 = (ymax - p0[1]) / d[1]
-            tmin = np.maximum(tmin, np.minimum(ty1, ty2))
-            tmax = np.minimum(tmax, np.maximum(ty1, ty2))
-        else:
-            mask = (ymin <= p0[1]) & (p0[1] < ymax)
-            tmax = np.where(mask, tmax, 0.0)
-
-        # Z axis
-        if d[2] != 0.0:
-            tz1 = (zmin - p0[2]) / d[2]
-            tz2 = (zmax - p0[2]) / d[2]
-            tmin = np.maximum(tmin, np.minimum(tz1, tz2))
-            tmax = np.minimum(tmax, np.maximum(tz1, tz2))
-        else:
-            mask = (zmin <= p0[2]) & (p0[2] < zmax)
-            tmax = np.where(mask, tmax, 0.0)
-
-        # Valid intersections
-        valid = (tmax > tmin) & (tmax > 0.0) & (tmin < 1.0)
-        t0 = np.maximum(tmin, 0.0)
-        t1 = np.minimum(tmax, 1.0)
-
-        lengths = np.where(valid, seg_len * (t1 - t0), 0.0)
-        return lengths
 
     def _normalize_points_array(self, points_xyz: Any) -> np.ndarray:
         """Return an (N, 3) float array from various point representations.
@@ -1398,7 +1150,9 @@ class PlanetMesh:
                 )
 
         # Create mesh instance
-        mesh_type = metadata.get('mesh_type', 'octree')
+        mesh_type = metadata.get('mesh_type', 'tetrahedral')
+        if mesh_type != 'tetrahedral':
+            raise ValueError(f"Unsupported mesh type: {mesh_type}. Only tetrahedral meshes are supported.")
         instance = cls(planet_model, mesh_type=mesh_type)
         instance.mesh = grid
 
