@@ -4,10 +4,14 @@
   "planet_model_radius": 6371.0,
   "generation_parameters": {},
   "properties": [
+    "gmsh:physical",
+    "gmsh:geometrical",
+    "layer_0-gmsh:bounding_entities",
+    "region",
     "vp",
     "vs",
     "rho"
   ],
-  "n_cells": 197612,
-  "n_points": 32849
+  "n_cells": 157877,
+  "n_points": 29986
 }

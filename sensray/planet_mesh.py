@@ -8,7 +8,7 @@ refinement and unified visualization methods.
 
 from __future__ import annotations
 
-from typing import Optional, Dict, List, Tuple, Any, TYPE_CHECKING
+from typing import Optional, Dict, List, Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .model import PlanetModel
@@ -64,42 +64,228 @@ class PlanetMesh:
 
     def generate_tetrahedral_mesh(self,
                                   mesh_size_km: float = 200.0,
-                                  **kwargs) -> None:
+                                  radii: Optional[List[float]] = None,
+                                  H_layers: Optional[List[float]] = None,
+                                  W_trans: Optional[List[float]] = None,
+                                  do_optimize: bool = True) -> None:
         """
-        Generate tetrahedral mesh using pygmsh.
+        Generate a layered tetrahedral mesh using gmsh with smooth
+        size transitions across spherical interfaces.
 
         Parameters
         ----------
         mesh_size_km : float
-            Characteristic mesh size in km
-        **kwargs
-            Additional arguments passed to pygmsh
+            Default characteristic size used if H_layers is not provided.
+        radii : list[float], optional
+            Ascending list of interface radii in km, including the outer
+            radius as the last value. Layers are (0..r1], (r1..r2], ...
+        H_layers : list[float], optional
+            Target mesh size per layer (len == len(radii)). If None, uses
+            [mesh_size_km] * len(radii).
+        W_trans : list[float], optional
+            Half-widths for smooth transitions at each internal interface
+            (len == len(radii)-1). If None, picks 0.2 * layer thickness.
+        do_optimize : bool
+            Whether to run gmsh mesh optimization.
         """
         try:
-            import pygmsh  # type: ignore
+            import gmsh  # type: ignore
             import meshio  # type: ignore
             import tempfile
             import os
+            import numpy as _np
         except ImportError as exc:
             raise ImportError(
-                "Tetrahedral mesh generation requires `pygmsh` and `meshio`. "
-                "Install with `pip install pygmsh meshio`."
+                "Layered tetrahedral mesh generation requires `gmsh` and "
+                "`meshio`. Install with `pip install gmsh meshio`."
             ) from exc
 
-        radius = self.planet_model.radius
+        # Build default radii. If radii is None, create a single-layer
+        # spherical domain (uniform tetrahedral size set by mesh_size_km).
+        if radii is None:
+            R_out = float(self.planet_model.radius)
+            radii = [R_out]
+            # For single-layer uniform sphere, default H_layers to mesh_size_km
+            if H_layers is None:
+                H_layers = [float(mesh_size_km)]
+            # No transition widths necessary for a single layer
+            if W_trans is None:
+                W_trans = []
 
-        with pygmsh.occ.Geometry() as geom:
-            geom.characteristic_length_min = mesh_size_km
-            geom.characteristic_length_max = mesh_size_km
-            geom.add_ball([0.0, 0.0, 0.0], radius)
-            gmsh_mesh = geom.generate_mesh()
+        # Validate radii
+        r = list(map(float, radii))
+        if not all(r[i] < r[i + 1] for i in range(len(r) - 1)):
+            raise ValueError(
+                "radii must be strictly ascending and include outer"
+            )
 
-            # Convert via temporary file
-            tmp = tempfile.NamedTemporaryFile(suffix=".vtu", delete=False)
-            tmp.close()
-            meshio.write(tmp.name, gmsh_mesh)
-            grid = pv.read(tmp.name)
-            os.remove(tmp.name)
+        # Defaults for sizes
+        if H_layers is None:
+            H_layers = [float(mesh_size_km)] * len(r)
+        if len(H_layers) != len(r):
+            raise ValueError(
+                "H_layers must have one entry per layer (len(radii))"
+            )
+
+        # Defaults for transition widths
+        if W_trans is None:
+            W_trans = []
+            for i in range(len(r)-1):
+                thick = r[i+1] - (r[i] if i >= 0 else 0.0)
+                W_trans.append(max(1e-3, 0.2 * float(thick)))
+        if len(W_trans) != len(r) - 1:
+            raise ValueError(
+                "W_trans must have one value per internal interface"
+            )
+
+        # ---- Gmsh generation (adapted from develop/tets_combined.py) ----
+        gmsh.initialize()
+        gmsh.model.add("sensray_nlayer_sphere")
+
+        # Disable heuristic size controls, use background field only
+        for name in (
+            "Mesh.MeshSizeFromPoints",
+            "Mesh.MeshSizeFromCurvature",
+            "Mesh.MeshSizeExtendFromBoundary",
+            "Mesh.CharacteristicLengthFromPoints",
+            "Mesh.CharacteristicLengthFromCurvature",
+            "Mesh.CharacteristicLengthExtendFromBoundary",
+        ):
+            try:
+                gmsh.option.setNumber(name, 0)
+            except Exception:
+                pass
+        for name in (
+            "Mesh.MeshSizeMin",
+            "Mesh.MeshSizeMax",
+            "Mesh.CharacteristicLengthMin",
+            "Mesh.CharacteristicLengthMax",
+        ):
+            try:
+                gmsh.option.setNumber(name, 1e-9 if "Min" in name else 1e12)
+            except Exception:
+                pass
+
+        # Geometry: inner spheres + outer sphere
+        inner_tags = []
+        for Ri in r[:-1]:
+            inner_tags.append(gmsh.model.occ.addSphere(0, 0, 0, Ri))
+        tag_outer = gmsh.model.occ.addSphere(0, 0, 0, r[-1])
+
+        gmsh.model.occ.fragment([(3, tag_outer)], [(3, t) for t in inner_tags])
+        gmsh.model.occ.synchronize()
+
+        # Physical groups for volumes ordered by radius
+        def extent(tag):
+            x0, y0, z0, x1, y1, z1 = gmsh.model.occ.getBoundingBox(3, tag)
+            return max(
+                abs(x0), abs(x1), abs(y0), abs(y1), abs(z0), abs(z1)
+            )
+        vols = gmsh.model.getEntities(3)
+        vols_sorted = [
+            t for (_, t) in sorted(
+                vols, key=lambda e: extent(e[1])
+            )
+        ]
+        if len(vols_sorted) != len(r):
+            gmsh.finalize()
+            raise RuntimeError("Unexpected number of volumes after fragment")
+        for i, vt in enumerate(vols_sorted, start=1):
+            gmsh.model.addPhysicalGroup(3, [vt], i)
+            gmsh.model.setPhysicalName(3, i, f"layer_{i-1}")
+
+        # Background size field H(r) via MathEval
+        r_expr = "sqrt(x*x+y*y+z*z)"
+        s_exprs = [
+            f"(0.5*(1+tanh(({r_expr}-{r[i]})/{W_trans[i]})))"
+            for i in range(len(r)-1)
+        ]
+
+        def prod_expr(seq):
+            if not seq:
+                return "1"
+            out = seq[0]
+            for e in seq[1:]:
+                out = f"({out})*({e})"
+            return out
+
+        windows = []
+        windows.append(f"(1-({s_exprs[0]}))" if s_exprs else "1")
+        for i in range(1, len(r)-1):
+            left = prod_expr(s_exprs[:i])
+            windows.append(f"({left})*(1-({s_exprs[i]}))")
+        if s_exprs:
+            windows.append(prod_expr(s_exprs))
+
+        terms = [
+            f"({float(H_layers[i])})*({windows[i]})"
+            for i in range(len(H_layers))
+        ]
+        H_expr = terms[0]
+        for t in terms[1:]:
+            H_expr = f"({H_expr})+({t})"
+
+        fid = gmsh.model.mesh.field.add("MathEval")
+        gmsh.model.mesh.field.setString(fid, "F", H_expr)
+        gmsh.model.mesh.field.setAsBackgroundMesh(fid)
+
+        # Mesh + optional optimize
+        gmsh.model.mesh.generate(3)
+        if do_optimize:
+            try:
+                gmsh.model.mesh.optimize("Netgen")
+            except Exception:
+                try:
+                    gmsh.option.setNumber("Mesh.OptimizeNetgen", 1)
+                except Exception:
+                    pass
+
+        # Write to temp .msh, convert to .vtu, read into PyVista
+        tmp_msh = tempfile.NamedTemporaryFile(suffix=".msh", delete=False)
+        tmp_msh.close()
+        msh_path = tmp_msh.name
+        gmsh.write(msh_path)
+        gmsh.finalize()
+
+        tmp_vtu = tempfile.NamedTemporaryFile(suffix=".vtu", delete=False)
+        tmp_vtu.close()
+        vtu_path = tmp_vtu.name
+        try:
+            mesh = meshio.read(msh_path)
+            meshio.write(vtu_path, mesh)
+            import pyvista as _pv  # local import for type checkers
+            grid = _pv.read(vtu_path)
+        finally:
+            try:
+                os.remove(msh_path)
+            except Exception:
+                pass
+            try:
+                os.remove(vtu_path)
+            except Exception:
+                pass
+
+        # Pull region ids from gmsh cell data if present
+        region_ids = None
+        for key in ("gmsh:physical", "physical"):
+            if key in grid.cell_data:
+                data = grid.cell_data[key]
+                if hasattr(data, "size") and data.size == grid.n_cells:
+                    region_ids = _np.asarray(data, dtype=_np.int32)
+                    break
+                if isinstance(data, (list, tuple)):
+                    for arr in data:
+                        if hasattr(arr, "size") and arr.size == grid.n_cells:
+                            region_ids = _np.asarray(arr, dtype=_np.int32)
+                            break
+                    if region_ids is not None:
+                        break
+        if region_ids is None:
+            # Fallback by radius of cell centers
+            rc = _np.linalg.norm(grid.cell_centers().points, axis=1)
+            bins = _np.r_[0.0, _np.array(r, float)]
+            region_ids = _np.digitize(rc, bins, right=True)
+        grid.cell_data["region"] = _np.asarray(region_ids, dtype=_np.int32)
 
         self.mesh = grid
         print(
@@ -173,11 +359,9 @@ class PlanetMesh:
                 earth_radius=self.planet_model.radius
             )
             path_points.append(xyz)
-
-        path_points = np.array(path_points)
-
-        # Compute per-cell intersections using tetrahedral method
-        return self._compute_polyline_cell_lengths_tetrahedral(path_points)
+        path_points = np.asarray(path_points, dtype=float)
+        # Compute per-cell intersections using midpoint-densify method
+        return self._compute_ray_cell_lengths_midpoint(path_points)
 
     def compute_multiple_ray_lengths(self, rays: List[Any]) -> np.ndarray:
         """
@@ -214,7 +398,7 @@ class PlanetMesh:
             Arrival object or ray object with 'path' attribute containing
             ray path points with 'depth', 'lat', 'lon' keys
         store_as : str, optional
-            If provided, store the computed lengths as cell data with this name.
+            If provided, store as cell data with this name.
             If None, lengths are computed but not stored.
         replace_existing : bool
             If True, replace existing cell data with the same name.
@@ -225,16 +409,10 @@ class PlanetMesh:
         np.ndarray
             Per-cell path lengths in km
 
-        Examples
-        --------
-        >>> rays = model.taupy_model.get_ray_paths_geo(
-        ...     source_depth_in_km=100, source_latitude_in_deg=0,
-        ...     source_longitude_in_deg=0, receiver_latitude_in_deg=30,
-        ...     receiver_longitude_in_deg=30, phase_list=["P"])
-        >>> if rays:
-        ...     lengths = mesh.compute_ray_lengths_from_arrival(
-        ...         rays[0], store_as="P_ray_lengths")
-        ...     # Now you can visualize with property_name="P_ray_lengths"
+    Examples
+    --------
+    This method accepts an ObsPy ray or arrival with a `.path` list of
+    dicts having keys 'lat', 'lon', 'depth'.
         """
         if self.mesh is None:
             raise RuntimeError(
@@ -279,11 +457,9 @@ class PlanetMesh:
                 earth_radius=self.planet_model.radius
             )
             path_points.append(xyz)
-
-        path_points = np.array(path_points)
-
-        # Compute per-cell intersections using tetrahedral method
-        lengths = self._compute_polyline_cell_lengths_tetrahedral(path_points)
+        path_points = np.asarray(path_points, dtype=float)
+        # Compute per-cell intersections using midpoint-densify method
+        lengths = self._compute_ray_cell_lengths_midpoint(path_points)
 
         # Store as cell data if requested
         if store_as is not None:
@@ -322,11 +498,9 @@ class PlanetMesh:
         np.ndarray
             Per-cell path lengths in km
 
-        Examples
-        --------
-        >>> rays = model.taupy_model.get_ray_paths_geo(..., phase_list=["P", "S"])
-        >>> mesh.add_ray_to_mesh(rays[0], "primary")  # Stores as "ray_primary_lengths"
-        >>> mesh.add_ray_to_mesh(rays[1], "secondary", "S")  # Stores as "ray_secondary_S_lengths"
+    Examples
+    --------
+    mesh.add_ray_to_mesh(ray_obj, "primary")
         """
         # Try to extract phase name if not provided
         if phase_name is None:
@@ -373,7 +547,7 @@ class PlanetMesh:
             Name of seismic property ('vp', 'vs', 'rho', etc.)
             Must exist in mesh.cell_data or will be populated from model
         attach_name : str, optional
-            Name to store kernel as cell data. If None, uses f"K_{property_name}"
+            Name to store kernel as cell data. If None, uses default.
         epsilon : float
             Small regularizer added to denominator to avoid division by zero
         replace_existing : bool
@@ -384,11 +558,9 @@ class PlanetMesh:
         np.ndarray
             Sensitivity kernel array (length n_cells)
 
-        Examples
-        --------
-        >>> rays = model.taupy_model.get_ray_paths_geo(..., phase_list=["P"])
-        >>> kernel = mesh.compute_sensitivity_kernel(rays[0], 'vp', attach_name='K_P')
-        >>> # Visualize with: mesh.plot_cross_section(property_name='K_P')
+    Examples
+    --------
+    kernel = mesh.compute_sensitivity_kernel(ray_obj, 'vp')
         """
         if self.mesh is None:
             raise RuntimeError(
@@ -440,7 +612,8 @@ class PlanetMesh:
         replace_existing: bool = True
     ) -> np.ndarray:
         """
-        Compute sensitivity kernels for multiple rays and optionally accumulate.
+    Compute sensitivity kernels for multiple rays and optionally
+    accumulate.
 
         Parameters
         ----------
@@ -454,7 +627,8 @@ class PlanetMesh:
             If None, uses f"Ksum_{property_name}" or f"K_{property_name}_{{i}}"
         accumulate : str or None
             If "sum", return and store sum of all kernels.
-            If None, return (n_rays, n_cells) array and store individual kernels
+            If None, return (n_rays, n_cells) array and store individual
+            kernels
         epsilon : float
             Small regularizer for denominator
         replace_existing : bool
@@ -466,15 +640,9 @@ class PlanetMesh:
             If accumulate='sum': 1D array (n_cells,) with summed kernels
             If accumulate=None: 2D array (n_rays, n_cells)
 
-        Examples
-        --------
-        >>> rays = model.taupy_model.get_ray_paths_geo(..., phase_list=["P", "S"])
-        >>> # Sum all kernels
-        >>> Ksum = mesh.compute_sensitivity_kernels_for_rays(
-        ...     rays, 'vp', attach_name='Ksum_P_S')
-        >>> # Keep individual kernels
-        >>> K_all = mesh.compute_sensitivity_kernels_for_rays(
-        ...     rays, 'vp', accumulate=None, attach_name='K_ray')
+    Examples
+    --------
+    Ksum = mesh.compute_sensitivity_kernels_for_rays(rays, 'vp')
         """
         if self.mesh is None:
             raise RuntimeError(
@@ -528,14 +696,18 @@ class PlanetMesh:
                     if name in self.mesh.cell_data and not replace_existing:
                         continue  # Skip if exists and not replacing
                     self.mesh.cell_data[name] = kernel.astype(np.float32)
-                print(f"Stored {len(kernels)} individual kernels with base name: '{base_name}_*'")
+                msg = (
+                    f"Stored {len(kernels)} individual kernels with base "
+                    f"name: '{base_name}_*'"
+                )
+                print(msg)
             return K_array
 
     # ===== Visualization =====
 
     def plot_cross_section(self,
-                           plane_normal: Tuple[float, float, float] = (0, 1, 0),
-                           plane_origin: Tuple[float, float, float] = (0, 0, 0),
+                           plane_normal=(0, 1, 0),
+                           plane_origin=(0, 0, 0),
                            property_name: str = "vp",
                            show_rays: Optional[List[Any]] = None,
                            **kwargs) -> Any:
@@ -561,7 +733,9 @@ class PlanetMesh:
             Plotter object for further customization
         """
         if self.mesh is None:
-            raise RuntimeError("No mesh generated. Call generate_*_mesh() first.")
+            raise RuntimeError(
+                "No mesh generated. Call generate_*_mesh() first."
+            )
 
         # Ensure property exists
         if property_name not in self.mesh.cell_data:
@@ -571,7 +745,8 @@ class PlanetMesh:
         clipped = self.mesh.clip(normal=plane_normal, origin=plane_origin)
 
         # Create plotter
-        plotter = pv.Plotter()
+        import pyvista as _pv
+        plotter = _pv.Plotter()
 
         # Add clipped mesh
         plotter.add_mesh(
@@ -614,7 +789,9 @@ class PlanetMesh:
             Plotter object
         """
         if self.mesh is None:
-            raise RuntimeError("No mesh generated. Call generate_*_mesh() first.")
+            raise RuntimeError(
+                "No mesh generated. Call generate_*_mesh() first."
+            )
 
         # Ensure property exists
         if property_name not in self.mesh.cell_data:
@@ -627,13 +804,16 @@ class PlanetMesh:
         mesh_with_radius.point_data["radius"] = radii
 
         # Extract isosurface
-        shell = mesh_with_radius.contour(isosurfaces=[radius_km], scalars="radius")
+        shell = mesh_with_radius.contour(
+            isosurfaces=[radius_km], scalars="radius"
+        )
 
         # Sample property onto shell
         shell_sampled = shell.sample(self.mesh)
 
         # Plot
-        plotter = pv.Plotter()
+        import pyvista as _pv
+        plotter = _pv.Plotter()
         plotter.add_mesh(
             shell_sampled,
             scalars=property_name,
@@ -662,18 +842,20 @@ class PlanetMesh:
         Returns
         -------
         dict
-            Dictionary with keys 'cell_data' and optionally 'point_data' mapping
+            Dictionary with keys 'cell_data' and optionally 'point_data'
+            mapping
             property names to small summary dicts (or None if not computed).
         """
         if self.mesh is None:
-            raise RuntimeError("No mesh generated. Call generate_*_mesh() first.")
+            raise RuntimeError(
+                "No mesh generated. Call generate_*_mesh() first."
+            )
 
-        result: Dict[str, Any] = {}
+        result = {}
 
         # Cell data
         cell_keys = list(self.mesh.cell_data.keys())
-        result['cell_data'] = {k: None for k in cell_keys}
-
+        result['cell_data'] = {}
         if show_stats and cell_keys:
             for k in cell_keys:
                 try:
@@ -686,18 +868,20 @@ class PlanetMesh:
                         'sum': float(np.nansum(arr)),
                         'non_zero': int((arr != 0).sum()),
                     }
-                    # small preview
                     preview_n = min(top_n, arr.size)
                     summary['preview'] = arr.flat[:preview_n].tolist()
-                except Exception as e:  # pragma: no cover - defensive
+                except Exception as e:  # pragma: no cover
                     summary = {'error': str(e)}
                 result['cell_data'][k] = summary
+        else:
+            # Map keys to None when not computing stats
+            result['cell_data'] = {k: None for k in cell_keys}
 
         # Point data (optional)
         if include_point_data:
             point_keys = list(self.mesh.point_data.keys())
-            result['point_data'] = {k: None for k in point_keys}
             if show_stats and point_keys:
+                result['point_data'] = {}
                 for k in point_keys:
                     try:
                         arr = np.asarray(self.mesh.point_data[k])
@@ -711,9 +895,11 @@ class PlanetMesh:
                         }
                         preview_n = min(top_n, arr.size)
                         summary['preview'] = arr.flat[:preview_n].tolist()
-                    except Exception as e:  # pragma: no cover - defensive
+                    except Exception as e:  # pragma: no cover
                         summary = {'error': str(e)}
                     result['point_data'][k] = summary
+            else:
+                result['point_data'] = {k: None for k in point_keys}
 
         # Print a compact summary for quick inspection
         print("Mesh properties summary:")
@@ -725,7 +911,10 @@ class PlanetMesh:
             print("\nCell property summaries (first entries):")
             for k, v in result['cell_data'].items():
                 if isinstance(v, dict):
-                    print(f" - {k}: min={v.get('min')}, max={v.get('max')}, non_zero={v.get('non_zero')}")
+                    print(
+                        f" - {k}: min={v.get('min')}, max={v.get('max')}, "
+                        f"non_zero={v.get('non_zero')}"
+                    )
                 else:
                     print(f" - {k}: {v}")
 
@@ -733,17 +922,182 @@ class PlanetMesh:
 
     # ===== Private Helper Methods =====
 
+    def _compute_polyline_cell_lengths_tetrahedral(
+        self, points: np.ndarray
+    ) -> np.ndarray:
+        """Compute per-cell lengths for tetrahedral mesh.
 
-
-    def _compute_polyline_cell_lengths_tetrahedral(self, points: np.ndarray) -> np.ndarray:
-        """Compute per-cell lengths for tetrahedral mesh using VTK locator."""
+        This now uses the midpoint-densify binning approach by default
+        for robustness. The old clipping-based method remains available
+        as `_compute_ray_cell_path_lengths_internal` if needed.
+        """
         if len(points) < 2:
-            return np.zeros(self.mesh.n_cells, dtype=float)
+            n = self.mesh.n_cells if self.mesh is not None else 0
+            return np.zeros(n, dtype=float)
+        return self._compute_ray_cell_lengths_midpoint(points)
 
-        # Use internal tetrahedral implementation
-        return self._compute_ray_cell_path_lengths_internal(points)
+    # ---- Ray lengths via densify + midpoint binning ----
+    @staticmethod
+    def _densify_polyline(
+        points: np.ndarray,
+        max_seg_len: float
+    ) -> np.ndarray:
+        pts = np.asarray(points, float)
+        if len(pts) == 0:
+            return pts
+        out = [pts[0]]
+        for a, b in zip(pts[:-1], pts[1:]):
+            L = float(np.linalg.norm(b - a))
+            if L == 0.0:
+                continue
+            n = max(1, int(np.ceil(L / float(max_seg_len))))
+            for i in range(1, n + 1):
+                t = i / float(n)
+                out.append(a * (1.0 - t) + b * t)
+        return np.asarray(out, float)
 
+    def _compute_ray_cell_lengths_midpoint(self,
+                                           ray_xyz: np.ndarray,
+                                           step_km: float = 8.0,
+                                           merge_tol: float = 1e-8
+                                           ) -> np.ndarray:
+        """
+        Accumulate ray length inside each cell by densifying segments and
+        binning by midpoint cell id using vtkStaticCellLocator.FindCell.
+        """
+        if self.mesh is None:
+            return np.zeros(0, float)
+        if ray_xyz.ndim != 2 or ray_xyz.shape[1] != 3:
+            raise ValueError("ray_xyz must have shape (N,3)")
 
+        if self.mesh.n_cells == 0:
+            return np.zeros(0, float)
+
+        # Densify and compute segment midpoints
+        pts = self._densify_polyline(ray_xyz, max_seg_len=float(step_km))
+        if len(pts) < 2:
+            return np.zeros(self.mesh.n_cells, float)
+        seg_vecs = pts[1:] - pts[:-1]
+        seg_len = np.linalg.norm(seg_vecs, axis=1)
+        keep = seg_len > float(merge_tol)
+        if not np.any(keep):
+            return np.zeros(self.mesh.n_cells, float)
+        mids = 0.5 * (pts[:-1] + pts[1:])[keep]
+        seg_vecs = seg_vecs[keep]
+        seg_len = seg_len[keep]
+
+        # Locator
+        from pyvista import _vtk as vtk  # type: ignore
+        loc = vtk.vtkStaticCellLocator()
+        loc.SetDataSet(self.mesh)
+        loc.BuildLocator()
+
+        def find_cell(point, v):
+            cid = loc.FindCell(point)
+            if cid is None or cid < 0:
+                eps = 1e-7
+                cid = loc.FindCell(point + eps * v)
+                if cid is None or cid < 0:
+                    cid = loc.FindCell(point - eps * v)
+            return int(cid) if cid is not None and cid >= 0 else -1
+
+        out = np.zeros(self.mesh.n_cells, float)
+        for m, v, L in zip(mids, seg_vecs, seg_len):
+            cid = find_cell(m, v)
+            if cid >= 0:
+                out[cid] += float(L)
+        return out
+
+    # ---- Visualization of ray lengths (inspired by develop/ray.py) ----
+    def plot_ray_lengths(self,
+                         arrival_or_xyz: Any,
+                         step_km: float = 8.0,
+                         store_as: str = "ray_len",
+                         screenshot: Optional[str] = None) -> Any:
+        """
+        Compute per-cell ray lengths, store on the mesh, and visualize
+        intersected cells colored by length with a ray polyline overlay.
+        Returns a PyVista Plotter.
+        """
+        if self.mesh is None:
+            raise RuntimeError(
+                "No mesh generated. Call generate_*_mesh() first."
+            )
+
+        # Extract ray xyz
+        if isinstance(arrival_or_xyz, (list, tuple, np.ndarray, dict)):
+            ray_xyz = self._normalize_points_array(arrival_or_xyz)
+        else:
+            # Assume ObsPy-like object with .path of dicts
+            pts = []
+            for p in getattr(arrival_or_xyz, 'path', []):
+                if isinstance(p, dict):
+                    depth_km = float(p.get('depth', 0.0))
+                    lat_deg = float(p.get('lat', 0.0))
+                    lon_deg = float(p.get('lon', 0.0))
+                else:
+                    depth_km = float(getattr(p, 'depth', 0.0))
+                    lat_deg = float(getattr(p, 'lat', 0.0))
+                    lon_deg = float(getattr(p, 'lon', 0.0))
+                from .coordinates import CoordinateConverter
+                xyz = CoordinateConverter.earth_to_cartesian(
+                    lat_deg, lon_deg, depth_km,
+                    earth_radius=self.planet_model.radius,
+                )
+                pts.append(xyz)
+            ray_xyz = np.asarray(pts, float)
+
+        # Compute lengths and store
+        lengths = self._compute_ray_cell_lengths_midpoint(
+            ray_xyz, step_km=step_km
+        )
+        self.mesh = self.mesh.copy()
+        self.mesh.cell_data[store_as] = lengths.astype(np.float32)
+
+        # Cells with >0 length
+        g_hit = None
+        if np.count_nonzero(lengths > 0.0) > 0:
+            lo = float(1e-10)
+            hi = float(np.max(lengths))
+            g_hit = self.mesh.threshold((lo, hi), scalars=store_as)
+
+        # Ray polyline and plotter
+        import pyvista as _pv
+        ray_poly = _pv.lines_from_points(ray_xyz)
+
+        p = _pv.Plotter(window_size=[1100, 800])
+        p.add_axes()
+        p.show_grid()
+        if self.mesh.n_cells > 0:
+            p.add_mesh(
+                _pv.wrap(self.mesh),
+                color="lightgray",
+                style="wireframe",
+                opacity=0.25,
+            )
+        if g_hit is not None and g_hit.n_cells > 0:
+            p.add_mesh(
+                g_hit,
+                scalars=store_as,
+                cmap="viridis",
+                show_edges=True,
+            )
+        p.add_mesh(ray_poly, line_width=4)
+
+        if screenshot:
+            try:
+                p.show(screenshot=screenshot, auto_close=True,
+                       interactive=False)
+            except Exception:
+                # fallback to headless
+                try:
+                    import pyvista as _pv
+                    _pv.start_xvfb()
+                except Exception:
+                    pass
+                p.show(screenshot=screenshot, auto_close=True,
+                       interactive=False)
+        return p
 
     def _normalize_points_array(self, points_xyz: Any) -> np.ndarray:
         """Return an (N, 3) float array from various point representations.
@@ -783,7 +1137,8 @@ class PlanetMesh:
                     rad = np.asarray(r, dtype=float)
                 elif depth is not None:
                     rad = (
-                        self.planet_model.radius - np.asarray(depth, dtype=float)
+                        self.planet_model.radius -
+                        np.asarray(depth, dtype=float)
                     )
                 else:
                     rad = np.full_like(
@@ -926,7 +1281,9 @@ class PlanetMesh:
 
         # Validate mesh exists
         if self.mesh is None:
-            raise RuntimeError("No mesh generated. Call generate_*_mesh() first.")
+            raise RuntimeError(
+                "No mesh generated. Call generate_*_mesh() first."
+            )
 
         # Validate mesh: proceed if there are any tetrahedra; skip others
         try:
@@ -1152,7 +1509,10 @@ class PlanetMesh:
         # Create mesh instance
         mesh_type = metadata.get('mesh_type', 'tetrahedral')
         if mesh_type != 'tetrahedral':
-            raise ValueError(f"Unsupported mesh type: {mesh_type}. Only tetrahedral meshes are supported.")
+            raise ValueError(
+                f"Unsupported mesh type: {mesh_type}. "
+                "Only tetrahedral meshes are supported."
+            )
         instance = cls(planet_model, mesh_type=mesh_type)
         instance.mesh = grid
 
