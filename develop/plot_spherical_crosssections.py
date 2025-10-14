@@ -61,6 +61,7 @@ def plot_on_sphere_cross_section(
     R: float,
     normal: np.ndarray,
     func: Callable,
+    cmap: str = 'viridis',
     out: str = 'sphere_cross_section_profile.png',
     show: bool = False
 ):
@@ -76,7 +77,7 @@ def plot_on_sphere_cross_section(
     # 3D scatter plot of the sampled points on the sphere
     fig = plt.figure(figsize=(8, 6))
     ax = fig.add_subplot(111, projection='3d')
-    sc = ax.scatter(x, y, z, c=f_values, cmap='viridis')
+    sc = ax.scatter(x, y, z, c=f_values, cmap=cmap)
     plt.colorbar(sc, ax=ax, label='f(x,y,z)')
     ax.set_title('3D Scatter of f on Sphere Cross-Section')
     ax.set_xlabel('X')
@@ -142,16 +143,17 @@ def plot_on_sphere(
         plt.close(fig)
 
 
-normal = np.array([1.0, 0.0, 1.0])  # normal vector of the great circle plane
-plot_on_sphere(
-    1.0,
-    f_xyz,
-    n_theta=20,
-    n_phi=40,
-    cmap='viridis',
-    out='sphere_surface.png',
-    show=True
-)
+if __name__ == "__main__":
+    normal = np.array([1.0, 0.0, 1.0])  # normal vector of the great circle plane
+    plot_on_sphere(
+        1.0,
+        f_xyz,
+        n_theta=20,
+        n_phi=40,
+        cmap='viridis',
+        out='sphere_surface.png',
+        show=True
+    )
 
 plot_on_sphere_cross_section(
     1.0,
