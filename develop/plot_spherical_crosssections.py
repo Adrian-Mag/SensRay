@@ -157,7 +157,6 @@ plot_on_sphere_cross_section(
     1.0,
     normal,
     f_xyz,
-    cmap='viridis',
     out='sphere_cross_section_profile.png',
     show=True
 )
