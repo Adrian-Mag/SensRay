@@ -40,16 +40,27 @@ def point(pointType="Source", minLat=-90, maxLat=90, minLon=-180, maxLon=180, mi
     else:
         raise ValueError("pointType must be 'Source' or 'Receiver'")
     
-def pointVel(x,y,z): 
-    # Simple smooth velocity model: velocity increases with depth
+def unpackVals(*args):
+    # Allow either 3 separate values or a single tuple/list of length 3
+    if len(args) == 1 and isinstance(args[0], (tuple, list)):
+        x, y, z = args[0]
+    elif len(args) == 3:
+        x, y, z = args
+    else:
+        raise ValueError("pointVel() expects either 3 values or a tuple/list of length 3")
+    return x, y, z
+
+def pointVel(*args):
+    x, y, z = unpackVals(*args)
+    
     return (x**2 + y**2 + z**2)**0.5 + 4.5 + 0.0003 * z
-    # return 4.5 + 0.0003 * z  # Example: Vp in km/s
+
 
 
 print(model.mesh.mesh.cell_centers().points)
 print(model.mesh.mesh.cell_data["vp"])
 # apply velocity model to all points in the cell centres of the initial mesh
-model.mesh.mesh.cell_data["dv"] = np.apply_along_axis(lambda r: pointVel(r[0], r[1], r[2]), axis=1, arr=model.mesh.mesh.cell_centers().points)
+model.mesh.mesh.cell_data["dv"] = np.apply_along_axis(pointVel, axis=1, arr=model.mesh.mesh.cell_centers().points)
 print(model.mesh.mesh.cell_data["dv"])
 
 print(model.mesh.mesh.cell_data["dv"].shape)
