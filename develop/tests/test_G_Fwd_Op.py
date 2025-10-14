@@ -47,12 +47,12 @@ def pointVel(x,y,z):
 
 
 print(model.mesh.mesh.cell_centers().points)
+print(model.mesh.mesh.cell_data["vp"])
 # apply velocity model to all points in the cell centres of the initial mesh
-# velocity = np.apply_along_axis(pointVel, axis=1, arr=model.mesh.mesh.cell_centers().points)
-velocity = np.apply_along_axis(lambda r: pointVel(r[0], r[1], r[2]), axis=1, arr=model.mesh.mesh.cell_centers().points)
-print(velocity)
+model.mesh.mesh.cell_data["dv"] = np.apply_along_axis(lambda r: pointVel(r[0], r[1], r[2]), axis=1, arr=model.mesh.mesh.cell_centers().points)
+print(model.mesh.mesh.cell_data["dv"])
 
-print(velocity.shape)
+print(model.mesh.mesh.cell_data["dv"].shape)
 
 normal = np.array([1.0, 0.0, 1.0])  # normal vector of the great circle plane
 plot_on_sphere(
@@ -94,16 +94,14 @@ phases = ["P", "S", "ScS"]
 
 # For G_FwdOp
 srp = [prod + tuple([phases]) for prod in product(sources, receivers)]
-srr = get_rays(srp)
-# For G_FwdOp_SinglePhase
-# srp_onephase = product(sources, receivers, phases)
 
 # # testing with one source-receiver pair - same as initial test
 # source_lat, source_lon, source_depth = 0.0, 0.0, 150.0  # Equator, 150 km depth
 # receiver_lat, receiver_lon = 30.0, 45.0  # Surface station
 # srp = [((source_lat, source_lon, source_depth), (receiver_lat, receiver_lon), ["P", "S", "ScS"])]
+srr = get_rays(srp)
 
-# appl = G(model, srp)
+print("Calculate travel time kernels and residuals...")
 appl = GFwdOp(model, srr[:,2])
-travel_times = appl.__apply__(velocity)
+travel_times = appl.__apply__(model.mesh.mesh.cell_data["dv"])
 print(travel_times)
