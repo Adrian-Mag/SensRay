@@ -1,9 +1,10 @@
 import numpy as np
 from random import seed
 from itertools import product
-from sensray import PlanetModel
+from sensray import PlanetModel, CoordinateConverter
 from GFwdOpClass import GFwdOp
 from GFwdOpClassLinOp import GFwdOp as GFwdOpLin
+from SphericalFunc import make_scalar_field
 
 seed(0)
 
@@ -37,6 +38,7 @@ def point(pointType="Source", minLat=-90, maxLat=90, minLon=-180, maxLon=180, mi
     else:
         raise ValueError("pointType must be 'Source' or 'Receiver'")
 
+# old simple function to calculate velocity at a point
 def pointVel(*args):
     # Allow either 3 separate values or a single tuple/list of length 3
     if len(args) == 1 and isinstance(args[0], (tuple, list)):
@@ -55,7 +57,18 @@ def pointVel(*args):
 # print(model.mesh.mesh.cell_centers().points)
 # print(model.mesh.mesh.cell_data["vp"])
 # apply velocity model to all points in the cell centres of the initial mesh
-model.mesh.mesh.cell_data["dv"] = np.apply_along_axis(lambda r: pointVel(*r), axis=1, arr=model.mesh.mesh.cell_centers().points)
+# model.mesh.mesh.cell_data["dv"] = np.apply_along_axis(lambda r: pointVel(*r), axis=1, arr=model.mesh.mesh.cell_centers().points)
+
+# make function for velocity perturbation
+# Define R(r) and T(theta, phi)
+R = lambda r: r**2 * np.exp(-r/1000)              # simple radial function
+T = lambda theta, phi: np.cos(theta)         # angular dependence
+
+f = make_scalar_field(R, T)
+
+# Apply the perturbation function to the mesh cell centers
+print(model.mesh.mesh.cell_centers().points)
+model.mesh.mesh.cell_data["dv"] = f(model.mesh.mesh.cell_centers().points)
 print(model.mesh.mesh.cell_data["dv"])
 
 def get_rays(srp):
@@ -75,22 +88,26 @@ def get_rays(srp):
 
 
 # Generate source and receiver points and combinations
-sources = [point("Source", minDepth=150, maxDepth=150) for _ in range(2)]
-receivers = [point("Receiver", maxDepth=0) for _ in range(5)]
-phases = ["P", "S", "ScS"]
+# sources = [point("Source", minDepth=150, maxDepth=150) for _ in range(2)]
+# receivers = [point("Receiver", maxDepth=0) for _ in range(5)]
+# phases = ["P", "S", "ScS"]
 
 # For G_FwdOp
-srp = [prod + tuple([phases]) for prod in product(sources, receivers)]
+# srp = [prod + tuple([phases]) for prod in product(sources, receivers)]
 
 # # testing with one source-receiver pair - same as initial test
-# source_lat, source_lon, source_depth = 0.0, 0.0, 150.0  # Equator, 150 km depth
-# receiver_lat, receiver_lon = 30.0, 45.0  # Surface station
-# srp = [((source_lat, source_lon, source_depth), (receiver_lat, receiver_lon), ["P", "S", "ScS"])]
+source_lat, source_lon, source_depth = 0.0, 0.0, 150.0  # Equator, 150 km depth
+receiver_lat, receiver_lon = 30.0, 45.0  # Surface station
+srp = [((source_lat, source_lon, source_depth), (receiver_lat, receiver_lon), ["P", "S", "ScS"])]
 srr = get_rays(srp)
+
+plane_normal = CoordinateConverter.compute_gc_plane_normal(
+    source_lat, source_lon, receiver_lat, receiver_lon
+)
 
 # Cross-section showing background Vp
 print("Background P-wave velocity:")
-plane_normal = np.array([1.0, 0.0, 1.0])
+plane_normal = plane_normal
 plotter1 = model.mesh.plot_cross_section(
     plane_normal=plane_normal,
     property_name='dv',
