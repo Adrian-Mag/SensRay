@@ -4,10 +4,6 @@ from itertools import product
 from sensray import PlanetModel
 from GFwdOpClass import GFwdOp
 
-import sys, os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from plot_spherical_crosssections import plot_on_sphere, plot_on_sphere_cross_section
-
 seed(0)
 
 # Load model and create mesh
@@ -39,37 +35,27 @@ def point(pointType="Source", minLat=-90, maxLat=90, minLon=-180, maxLon=180, mi
         return (lat, lon)
     else:
         raise ValueError("pointType must be 'Source' or 'Receiver'")
+
+def pointVel(*args):
+    # Allow either 3 separate values or a single tuple/list of length 3
+    if len(args) == 1 and isinstance(args[0], (tuple, list)):
+        x, y, z = args[0]
+    elif len(args) == 3:
+        x, y, z = args
+    else:
+        raise ValueError("pointVel() expects either 3 values or a tuple/list of length 3")
     
-def pointVel(x,y,z): 
-    # Simple smooth velocity model: velocity increases with depth
+    #x, y, z = unpackVals(args)
+    
     return (x**2 + y**2 + z**2)**0.5 + 4.5 + 0.0003 * z
-    # return 4.5 + 0.0003 * z  # Example: Vp in km/s
 
 
-print(model.mesh.mesh.cell_centers().points)
-print(model.mesh.mesh.cell_data["vp"])
+
+# print(model.mesh.mesh.cell_centers().points)
+# print(model.mesh.mesh.cell_data["vp"])
 # apply velocity model to all points in the cell centres of the initial mesh
-model.mesh.mesh.cell_data["dv"] = np.apply_along_axis(lambda r: pointVel(r[0], r[1], r[2]), axis=1, arr=model.mesh.mesh.cell_centers().points)
+model.mesh.mesh.cell_data["dv"] = np.apply_along_axis(lambda r: pointVel(*r), axis=1, arr=model.mesh.mesh.cell_centers().points)
 print(model.mesh.mesh.cell_data["dv"])
-
-print(model.mesh.mesh.cell_data["dv"].shape)
-
-normal = np.array([1.0, 0.0, 1.0])  # normal vector of the great circle plane
-plot_on_sphere(
-    1.0,
-    pointVel,
-    n_theta=20,
-    n_phi=40,
-    show=True
-)
-
-plot_on_sphere_cross_section(
-    1.0,
-    normal,
-    pointVel,
-    show=True
-)
-
 
 def get_rays(srp):
     srr_lst = []
@@ -100,6 +86,16 @@ srp = [prod + tuple([phases]) for prod in product(sources, receivers)]
 # receiver_lat, receiver_lon = 30.0, 45.0  # Surface station
 # srp = [((source_lat, source_lon, source_depth), (receiver_lat, receiver_lon), ["P", "S", "ScS"])]
 srr = get_rays(srp)
+
+# Cross-section showing background Vp
+print("Background P-wave velocity:")
+plane_normal = np.array([1.0, 0.0, 1.0])
+plotter1 = model.mesh.plot_cross_section(
+    plane_normal=plane_normal,
+    property_name='dv',
+)
+plotter1.camera.position = (8000, 6000, 10000)
+plotter1.show()
 
 print("Calculate travel time kernels and residuals...")
 appl = GFwdOp(model, srr[:,2])
