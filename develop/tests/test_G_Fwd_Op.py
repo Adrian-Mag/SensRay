@@ -3,6 +3,7 @@ from random import seed
 from itertools import product
 from sensray import PlanetModel
 from GFwdOpClass import GFwdOp
+from GFwdOpClassLinOp import GFwdOp as GFwdOpLin
 
 seed(0)
 
@@ -101,3 +102,9 @@ print("Calculate travel time kernels and residuals...")
 appl = GFwdOp(model, srr[:,2])
 travel_times = appl.__apply__(model.mesh.mesh.cell_data["dv"])
 print(travel_times)
+
+print("Calculate travel time kernels and residuals...")
+appl = GFwdOpLin(model, srr[:,2])
+travel_times = appl.__apply__(model.mesh.mesh.cell_data["dv"])
+print(travel_times)
+
