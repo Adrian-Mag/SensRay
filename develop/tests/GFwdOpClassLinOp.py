@@ -1,7 +1,4 @@
-import numpy as np
 from scipy.sparse import csr_matrix, vstack
-
-
 from pygeoinf.linear_operators import LinearOperator
 from pygeoinf.hilbert_space import EuclideanSpace
 
