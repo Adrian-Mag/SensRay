@@ -9,7 +9,6 @@ from GFwdOpClassLinOp import GFwdOp as GFwdOpLin
 from SphericalFunc import make_scalar_field
 from quadpy_integral import integrate_over_tetrahedra
 
-seed(0)
 
 # Load model and create mesh
 model = PlanetModel.from_standard_model('prem')
