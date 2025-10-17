@@ -7,9 +7,8 @@ layered structure and discontinuities as defined in the .nd format.
 """
 
 import numpy as np
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any, Union
 import matplotlib.pyplot as plt
-from matplotlib.figure import Figure
 from matplotlib.axes import Axes
 import os
 import tempfile
@@ -108,19 +107,8 @@ class PlanetModel:
         models_dir = os.path.join(module_dir, 'models')
         models_dir = os.path.normpath(models_dir)
 
-        # Handle common aliases and case variations
-        model_aliases = {
-            'ak135': 'ak135favg',
-            'AK135': 'ak135favg',
-            'PREM': 'prem',
-            'Prem': 'prem'
-        }
-
-        # Use alias if available, otherwise use the name as-is
-        actual_model_name = model_aliases.get(model_name, model_name.lower())
-
         # Construct the full path to the .nd file
-        nd_file_path = os.path.join(models_dir, f"{actual_model_name}.nd")
+        nd_file_path = os.path.join(models_dir, f"{model_name}.nd")
 
         if not os.path.exists(nd_file_path):
             # List available models for the error message
@@ -128,7 +116,7 @@ class PlanetModel:
             if os.path.exists(models_dir):
                 for file in os.listdir(models_dir):
                     if file.endswith('.nd'):
-                        available_models.append(file[:-3])  # Remove .nd extension
+                        available_models.append(file[:-3])
 
             raise ValueError(
                 f"Standard model '{model_name}' not found. "
@@ -136,7 +124,7 @@ class PlanetModel:
             )
 
         # Create the model with a clean name
-        clean_name = actual_model_name.upper()
+        clean_name = model_name.upper()
         return cls(nd_file_path, name=clean_name)
 
     @classmethod
@@ -300,55 +288,128 @@ class PlanetModel:
 
     # ========== Read-Only Property Access ========== #
 
-    def get_property_at_depth(self, property_name: str, depth: float) -> float:
+    def get_property_at_depth(
+        self, property_name: str, depth: Union[float, "np.ndarray"]
+    ) -> Union[float, "np.ndarray"]:
         """
-        Get property value at a specific depth.
+        Get property value at one or more depths.
 
-        For depths at discontinuities, returns the value from the layer
-        that the depth falls into based on the depth ordering in the file.
+    This function is vectorized: `depth` can be a float or a 1-D array of
+    depths (in km from the surface). When `depth` is an array, a numpy
+    array of interpolated values is returned with the same shape.
+
+        For depths at discontinuities, the value returned corresponds to the
+        layer value according to the ordering in the .nd file.
 
         Parameters
         ----------
         property_name : str
             Property name ('vp', 'vs', 'rho')
-        depth : float
-            Depth in km from surface
+        depth : float or array-like
+            Depth(s) in km from surface
 
         Returns
         -------
-        float
-            Interpolated property value
+        float or ndarray
+            Interpolated property value(s)
         """
         if property_name not in ['vp', 'vs', 'rho']:
             raise ValueError(f"Unknown property: {property_name}")
 
-        if depth < 0 or depth > self.radius:
-            raise ValueError(
-                f"Depth {depth} outside valid range [0, {self.radius}]"
-            )
-
-        # Use the same ordering as get_property_profile to ensure consistency
+        # Build sorted depth/value arrays once
         all_depths = []
         all_values = []
-
         for layer in self.layers:
             for point in layer['points']:
                 all_depths.append(point['depth'])
                 all_values.append(point[property_name])
 
-        # Sort by depth to maintain discontinuity structure
         sort_idx = np.argsort(all_depths)
         sorted_depths = np.array(all_depths)[sort_idx]
         sorted_values = np.array(all_values)[sort_idx]
 
-        return float(np.interp(depth, sorted_depths, sorted_values))
+        # Convert input to numpy array for vectorized interpolation
+        was_scalar = np.isscalar(depth)
+        depth_arr = np.asarray(depth, dtype=float)
+
+        if depth_arr.ndim == 0:
+            if depth_arr < 0 or depth_arr > self.radius:
+                raise ValueError(
+                    "Depth {} outside valid range [0, {}]".format(
+                        float(depth_arr), self.radius
+                    )
+                )
+        else:
+            if np.any((depth_arr < 0) | (depth_arr > self.radius)):
+                raise ValueError(
+                    "One or more depths outside valid range [0, {}]".format(
+                        self.radius
+                    )
+                )
+
+        interpolated = np.interp(depth_arr, sorted_depths, sorted_values)
+
+        if was_scalar:
+            return float(interpolated)
+        return interpolated
 
     def get_property_at_radius(
-        self, property_name: str, radius: float
-    ) -> float:
-        """Get property value at a specific radius."""
-        depth = self.radius - radius
+        self, property_name: str, radius: Union[float, "np.ndarray"]
+    ) -> Union[float, "np.ndarray"]:
+        """Get property value at a specific radius.
+
+        Accepts scalar or array-like `radius` and returns matching shape.
+        """
+        depth = self.radius - np.asarray(radius)
         return self.get_property_at_depth(property_name, depth)
+
+    def get_property_at_3d_points(
+        self, property_name: str, points: np.ndarray
+    ) -> np.ndarray:
+        """
+        Get property values at multiple 3D points.
+
+        Parameters
+        ----------
+        property_name : str
+            Property name ('vp', 'vs', 'rho')
+        points : np.ndarray
+            Array of points in Cartesian coordinates (x, y, z) in km.
+            Accepts either shape (N, 3) or (3, N).
+
+        Returns
+        -------
+        np.ndarray
+            Array of property values at the given points
+
+        Notes
+        -----
+        Automatically handles both common coordinate conventions:
+        - (N, 3): points as rows [point1, point2, ...] (standard)
+        - (3, N): coordinates as rows [x_coords, y_coords, z_coords]
+                 (quadpy convention)
+        """
+        if property_name not in ['vp', 'vs', 'rho']:
+            raise ValueError(f"Unknown property: {property_name}")
+
+        if points.ndim != 2:
+            raise ValueError("Points array must be 2-dimensional")
+
+        # Handle both (N, 3) and (3, N) shapes
+        if points.shape[0] == 3 and points.shape[1] != 3:
+            # Shape is (3, N) - transpose to (N, 3)
+            points = points.T
+        elif points.shape[1] != 3:
+            raise ValueError(
+                "Points array must have shape (N, 3) or (3, N)"
+            )
+
+        # Convert Cartesian to radius (vectorized)
+        radii = np.linalg.norm(points, axis=1)
+        depths = self.radius - radii
+
+        # Use the vectorized depth lookup and return as ndarray
+        return np.asarray(self.get_property_at_depth(property_name, depths))
 
     def get_property_profile(self, name: str) -> Dict[str, np.ndarray]:
         """
@@ -549,8 +610,8 @@ class PlanetModel:
         max_depth_km: Optional[float] = None,
         ax: Optional[Axes] = None,
         show_discontinuities: bool = True,
-        colors: Optional[Dict[str, str]] = None
-    ) -> Tuple[Figure, Axes]:
+        colors: Optional[Dict[str, str]] = None,
+    ) -> Tuple[Any, Axes]:
         """
         Plot 1D profiles of seismic properties.
 
@@ -662,6 +723,20 @@ class PlanetModel:
         **kwargs
             Additional arguments passed to mesh generation.
             Ignored if from_file is provided.
+        Additional kwargs for tetrahedral mesh generation:
+            mesh_size_km : float
+            Default characteristic size used if H_layers is not provided.
+        radii : list[float], optional
+            Ascending list of interface radii in km, including the outer
+            radius as the last value. Layers are (0..r1], (r1..r2], ...
+        H_layers : list[float], optional
+            Target mesh size per layer (len == len(radii)). If None, uses
+            [mesh_size_km] * len(radii).
+        W_trans : list[float], optional
+            Half-widths for smooth transitions at each internal interface
+            (len == len(radii)-1). If None, picks 0.2 * layer thickness.
+        do_optimize : bool
+            Whether to run gmsh mesh optimization.
 
         Returns
         -------

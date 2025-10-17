@@ -39,6 +39,10 @@ setup(
         "scipy>=1.7.0",
         "obspy>=1.3.0",
         "geographiclib>=2.1",
+        "trame>=3.11",
+        "trame-vtk>=2.10",
+        "trame-vuetify>=3.1"
+        "vtk>=9.0.1",
     ],
     extras_require={
         "dev": [
