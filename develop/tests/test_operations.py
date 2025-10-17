@@ -34,7 +34,7 @@ def get_rays(srp):
     where source = (lat, lon, depth), receiver = (lat, lon), phases = [phase1, phase2, ...]
     returns array of (source, receiver, ray) for each ray
     '''
-    srr_lst = []
+    srr_list = []
     for (source, receiver, phases) in srp:
         rays = model.taupy_model.get_ray_paths_geo(
             source_depth_in_km=source[2],
