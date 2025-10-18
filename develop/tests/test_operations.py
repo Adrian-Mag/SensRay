@@ -1,12 +1,13 @@
+import logging
+from typing import Any, Iterable, List, Tuple
+
 import numpy as np
-from random import seed
 from itertools import product
 from typing import Callable, Union
 import quadpy
 from sensray import PlanetModel, CoordinateConverter
 from GFwdOpClassLinOp import GFwdOp
 
-seed(0)
 
 # function to make points
 def point(pointType="Source", minLat=-90, maxLat=90, minLon=-180, maxLon=180, minDepth=0, maxDepth=700):
@@ -33,19 +34,20 @@ def get_rays(srp):
     where source = (lat, lon, depth), receiver = (lat, lon), phases = [phase1, phase2, ...]
     returns array of (source, receiver, ray) for each ray
     '''
-    srr_lst = []
+    srr_list = []
     for (source, receiver, phases) in srp:
         rays = model.taupy_model.get_ray_paths_geo(
-    source_depth_in_km=source[2],
-    source_latitude_in_deg=source[0],
-    source_longitude_in_deg=source[1],
-    receiver_latitude_in_deg=receiver[0],
-    receiver_longitude_in_deg=receiver[1],
-    phase_list=phases
-)
+            source_depth_in_km=source[2],
+            source_latitude_in_deg=source[0],
+            source_longitude_in_deg=source[1],
+            receiver_latitude_in_deg=receiver[0],
+            receiver_longitude_in_deg=receiver[1],
+            phase_list=phases,
+        )
         for ray in rays:
-            srr_lst.append((source, receiver, ray))
-    return np.array(srr_lst, dtype=object)
+            srr_list.append((source, receiver, ray))
+
+    return np.array(srr_list, dtype=object)
 
 def display_dv(source_lat, source_lon, receiver_lat, receiver_lon):
     '''
@@ -228,20 +230,39 @@ def integrate_over_tetrahedra(tetra_points, f, scheme=None):
 #     return projected_values
 
 
+def make_list(a, b, n, x):
+    """
+    Create a list of length n with all elements equal to `a`,
+    except the last x elements which are equal to `b`.
+    """
+    if x > n:
+        raise ValueError("x cannot be greater than n")
+    return [a] * (n - x) + [b] * x
+
+
+# Example usage:
+result = make_list(a=0, b=1, n=10, x=3)
+print(result)
 # Load model and create mesh
-model = PlanetModel.from_standard_model('prem')
+model_name = "M1"
+mesh_size_km = 1000
+
+
+model = PlanetModel(f'../../sensray/models/{model_name}.nd', model_name)
 # Create mesh and save if not exist, otherwise load existing
-mesh_path = "prem_mesh"
+mesh_path = "M1_mesh"
+
+
 try:
     model.create_mesh(from_file=mesh_path)
     print(f"Loaded existing mesh from {mesh_path}")
 except FileNotFoundError:
     print("Creating new mesh...")
-    radii = [1221.5, 3480.0, 6371]
-    H_layers = [1000, 1000, 600]
-    model.create_mesh(mesh_size_km=1000, radii=radii, H_layers=H_layers)
-    model.mesh.populate_properties(['vp', 'vs', 'rho'])
-    model.mesh.save("prem_mesh")  # Save mesh to VT
+    radii = model.get_discontinuities()
+    H_layers = make_list(a=mesh_size_km, b=mesh_size_km/5, n=len(radii), x=1)
+    model.create_mesh(mesh_size_km=mesh_size_km, radii=radii, H_layers=H_layers)
+    model.mesh.populate_properties(model.get_info()["properties"])
+    model.mesh.save(f"{model_name}_mesh")  # Save mesh to VT
 print(f"Created mesh: {model.mesh.mesh.n_cells} cells")
 
 
@@ -284,17 +305,18 @@ srr = get_rays(srp)
 
 
 # integrate a function over a cell from the mesh
-points, indices = get_all_tetrahedra(model)
-print(points)
+# points, indices = get_all_tetrahedra(model)
+# print(points)
 # pts, ctypes, cell_indices, cell_pts = get_cell_data(model, cell_id=0)
 
 print("Integrating over cell...")
 # tetra_points: (18337, 4, 3)
-integrals = integrate_over_tetrahedra(points, f)
-print("Shape:", integrals.shape)       # (18337,)
-print("First 5 integrals:", integrals[:5])
+model.mesh.project_function_on_mesh(f, property_name="dv")
+#integrals = integrate_over_tetrahedra(points, f)
+#print("Shape:", integrals.shape)       # (18337,)
+#print("First 5 integrals:", integrals[:5])
 
-model.mesh.mesh.cell_data["dv"] = integrals
+#model.mesh.mesh.cell_data["dv"] = integrals
 print("Cell data 'dv':", model.mesh.mesh.cell_data["dv"])
 # display dv using first source-receiver pair
 display_dv(srr[0,0][0], srr[0,0][1], srr[0,1][0], srr[0,1][1])
