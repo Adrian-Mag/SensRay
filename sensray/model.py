@@ -106,7 +106,6 @@ class PlanetModel:
         module_dir = os.path.dirname(os.path.abspath(__file__))
         models_dir = os.path.join(module_dir, 'models')
         models_dir = os.path.normpath(models_dir)
-        print(models_dir)
 
         # Construct the full path to the .nd file
         nd_file_path = os.path.join(models_dir, f"{model_name}.nd")
