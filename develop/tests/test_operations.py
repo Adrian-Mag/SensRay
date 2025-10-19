@@ -6,7 +6,7 @@ from itertools import product
 from typing import Callable, Union
 import quadpy
 from sensray import PlanetModel, CoordinateConverter
-from GFwdOpClassLinOp import GFwdOp
+from g_fwd_op import GFwdOp
 
 
 # function to make points
@@ -27,6 +27,7 @@ def point(pointType="Source", minLat=-90, maxLat=90, minLon=-180, maxLon=180, mi
         return (lat, lon)
     else:
         raise ValueError("pointType must be 'Source' or 'Receiver'")
+
 
 def get_rays(srp):
     '''
@@ -49,6 +50,7 @@ def get_rays(srp):
 
     return np.array(srr_list, dtype=object)
 
+
 def display_dv(source_lat, source_lon, receiver_lat, receiver_lon):
     '''
     Display the dv property on a cross-section plane defined by source and receiver
@@ -67,60 +69,9 @@ def display_dv(source_lat, source_lon, receiver_lat, receiver_lon):
     plotter1.camera.position = (8000, 6000, 10000)
     plotter1.show()
 
-# def get_cell_data(model, cell_id=0):
-#     '''
-#     Get data for a specific cell in the mesh
-#     cell_id: index of the cell to extract
-#     returns: points, cell types, cell indices, cell points
-#     '''
-#     # Extract the cell as a new UnstructuredGrid
-#     cell_grid = model.mesh.mesh.extract_cells(cell_id)
-#     # Points of the cell (N_points, 3) array
-#     pts = cell_grid.points
-#     # Cell connectivity / indices: cell_grid.cells is a flat array encoding types & offsets
-#     # For convenience you can convert to numpy or inspect celltypes
-#     ctypes = cell_grid.celltypes
-#     print("Cell types:", ctypes)
-#     # Assuming we have only one cell here, get the indices of the points forming the cell
-#     cell_indices = cell_grid.cells[1:]  # Skip the first element which is the number of points
-#     print("Cell indices:", cell_indices)
-#     cell_pts = pts[cell_indices]
-#     print("Cell points:\n", cell_pts)
-#     return pts, ctypes, cell_indices, cell_pts
-
-# import numpy as np
-
-def get_all_tetrahedra(model):
-    """
-    Extract all tetrahedron points from a mesh, assuming all cells are tetrahedra.
-
-    Parameters
-    ----------
-    model : object
-        Model containing `model.mesh.mesh` (a pyvista.UnstructuredGrid).
-
-    Returns
-    -------
-    tetra_points : (N_tets, 4, 3) ndarray
-        Coordinates of all tetrahedron corners.
-    tetra_indices : (N_tets, 4) ndarray
-        Indices of the vertices for each tetrahedron.
-    """
-    grid = model.mesh.mesh
-    cells = grid.cells
-    points = grid.points
-
-    # Reshape flat cell array: each row [4, i0, i1, i2, i3]
-    n_tets = len(cells) // 5
-    tetra_cells = cells.reshape((n_tets, 5))
-    tetra_indices = tetra_cells[:, 1:]  # skip the leading 4
-
-    # Extract coordinates
-    tetra_points = points[tetra_indices]  # shape (N_tets, 4, 3)
-
-    return tetra_points, tetra_indices
 
 Number = Union[float, int]
+
 
 def make_scalar_field(
     R: Callable[[np.ndarray], np.ndarray],
@@ -171,64 +122,6 @@ def make_scalar_field(
 
     return f
 
-# def integrate_over_tetrahedra2(f, tetra_vertices, scheme_order=5):
-#     '''
-#     Integrate function f over tetrahedra defined by tetra_vertices using quadpy.
-#     tetra_vertices: array of shape (4, 3, n_tetra)
-#     f: function to integrate, should accept (3, n_points) input
-#     scheme_order: order of the quadrature scheme
-#     returns: total integral over all tetrahedra
-#     '''
-#     scheme = quadpy.t3.get_good_scheme(scheme_order)
-#     element_integrals = scheme.integrate(f, tetra_vertices)   # array of shape (n_tetra,)
-#     total_integral = element_integrals.sum()
-#     return total_integral
-
-# import numpy as np
-# import quadpy
-
-def integrate_over_tetrahedra(tetra_points, f, scheme=None):
-    """
-    Integrate a function over all tetrahedra using QuadPy.
-
-    Parameters
-    ----------
-    tetra_points : ndarray, shape (n_tets, 4, 3)
-        Coordinates of tetrahedron corners.
-    f : callable
-        Function to integrate. Should accept points of shape (n, 3) and return (n,).
-    scheme : quadpy.t3.Stroud, optional
-        QuadPy tetrahedron integration scheme. If None, defaults to Stroud 5th order.
-
-    Returns
-    -------
-    integrals : ndarray, shape (n_tets,)
-        Integral of f over each tetrahedron.
-    """
-    n_tets = tetra_points.shape[0]
-    if scheme is None:
-        scheme = quadpy.t3.get_good_scheme(5)
-
-    # QuadPy expects shape (4, n_tets, 3)
-    tetra_qp = np.transpose(tetra_points, (1, 0, 2))  # (4, n_tets, 3)
-
-    integrals = np.zeros(n_tets)
-    for i in range(n_tets):
-        tet = tetra_qp[:, i, :]  # shape (4, 3)
-        integrals[i] = scheme.integrate(f, tet)
-
-    return integrals
-
-# def project_function_onto_mesh(model, f):
-#     '''
-#     Project function f onto the mesh cell centers
-#     f: function to project, should accept (3, n_points) input
-#     returns: array of projected values at cell centers
-#     '''
-#     cell_centers = model.mesh.mesh.cell_centers().points  # (n_cells, 3)
-#     projected_values = f(cell_centers.T)  # Transpose to (3, n_cells)
-#     return projected_values
-
 
 def make_list(a, b, n, x):
     """
@@ -240,9 +133,6 @@ def make_list(a, b, n, x):
     return [a] * (n - x) + [b] * x
 
 
-# Example usage:
-result = make_list(a=0, b=1, n=10, x=3)
-print(result)
 # Load model and create mesh
 model_name = "M1"
 mesh_size_km = 1000
@@ -276,10 +166,6 @@ T = lambda theta, phi: np.ones_like(theta)
 
 f = make_scalar_field(R, T)
 
-# Apply the perturbation function to the mesh cell centers
-# model.mesh.mesh.cell_data["dv"] = f(model.mesh.mesh.cell_centers().points)
-# print(model.mesh.mesh.cell_data["dv"])
-
 
 # Generate source and receiver points and combinations
 # sources = [point("Source", minDepth=150, maxDepth=150) for _ in range(2)]
@@ -295,14 +181,9 @@ srp = [((source_lat, source_lon, source_depth), (receiver_lat, receiver_lon), ["
 
 srr = get_rays(srp)
 
-# display dv using first source-receiver pair
-# display_dv(srr[0,0][0], srr[0,0][1], srr[0,1][0], srr[0,1][1])
-
 # print("Calculate travel time kernels and residuals...")
-# appl = GFwdOp(model, srr[:,2])
-# travel_times = appl.__apply__(model.mesh.mesh.cell_data["dv"])
+appl = GFwdOp(model, srr[:,2])
 # print(travel_times)
-
 
 # integrate a function over a cell from the mesh
 # points, indices = get_all_tetrahedra(model)
@@ -310,13 +191,12 @@ srr = get_rays(srp)
 # pts, ctypes, cell_indices, cell_pts = get_cell_data(model, cell_id=0)
 
 print("Integrating over cell...")
-# tetra_points: (18337, 4, 3)
 model.mesh.project_function_on_mesh(f, property_name="dv")
-#integrals = integrate_over_tetrahedra(points, f)
-#print("Shape:", integrals.shape)       # (18337,)
-#print("First 5 integrals:", integrals[:5])
 
-#model.mesh.mesh.cell_data["dv"] = integrals
+# model.mesh.mesh.cell_data["dv"] = integrals
 print("Cell data 'dv':", model.mesh.mesh.cell_data["dv"])
+
+travel_times = appl.mapping(model.mesh.mesh.cell_data["dv"])
+
 # display dv using first source-receiver pair
 display_dv(srr[0,0][0], srr[0,0][1], srr[0,1][0], srr[0,1][1])
