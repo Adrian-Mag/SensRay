@@ -8,8 +8,8 @@ refinement and unified visualization methods.
 
 from __future__ import annotations
 
-from typing import Optional, Dict, List, Any, TYPE_CHECKING
-
+from typing import Optional, Dict, List, Any, TYPE_CHECKING, Callable
+import quadpy
 if TYPE_CHECKING:
     from .model import PlanetModel
 import numpy as np
@@ -311,15 +311,16 @@ class PlanetMesh:
                 "No mesh generated. Call generate_*_mesh() first."
             )
 
-        centers = self.mesh.cell_centers().points
-        depths = self.planet_model.radius - np.linalg.norm(centers, axis=1)
-
         for prop in properties:
-            values = np.array([
-                self.planet_model.get_property_at_depth(prop, depth)
-                for depth in depths
-            ], dtype=np.float32)
-            self.mesh.cell_data[prop] = values
+            # Compute and store property averages per cell via quadrature.
+            # project_function_on_mesh expects (function, property_name) and
+            # stores the result into mesh.cell_data[property_name].
+            self.project_function_on_mesh(
+                lambda pts: self.planet_model.get_property_at_3d_points(
+                    prop, pts
+                ),
+                prop,
+            )
 
         print(f"Populated properties: {properties}")
 
@@ -919,6 +920,62 @@ class PlanetMesh:
                     print(f" - {k}: {v}")
 
         return result
+
+    def project_function_on_mesh(
+        self, function: Callable[[np.ndarray], np.ndarray],
+        property_name: str,
+    ) -> None:
+        # Extract tetrahedral cells and points for integration
+        grid = self.mesh
+        if grid is None:
+            raise RuntimeError(
+                "No mesh available. Call generate_*_mesh() first."
+            )
+        cells = grid.cells
+        points = grid.points
+
+        # Reshape flat cell array: each row [4, i0, i1, i2, i3]
+        n_tets = len(cells) // 5
+        tetra_cells = cells.reshape((n_tets, 5))
+        tetra_indices = tetra_cells[:, 1:]  # skip the leading 4
+
+        # Extract coordinates
+        tetra_points = points[tetra_indices]  # shape (N_tets, 4, 3)
+
+        n_tets = tetra_points.shape[0]
+        scheme: Any = quadpy.t3.get_good_scheme(5)
+
+        # QuadPy expects shape (4, n_tets, 3)
+        tetra_qp = np.transpose(tetra_points, (1, 0, 2))  # (4, n_tets, 3)
+
+        # Compute volumes for each tetra: V = |det([p1-p0, p2-p0, p3-p0])| / 6
+        # tetra_points shape: (n_tets, 4, 3)
+        p0 = tetra_points[:, 0, :]
+        p1 = tetra_points[:, 1, :]
+        p2 = tetra_points[:, 2, :]
+        p3 = tetra_points[:, 3, :]
+        # Vectorized cross and dot to get 6*volume
+        cross = np.cross(p1 - p0, p2 - p0)
+        six_vol = np.einsum('ij,ij->i', cross, p3 - p0)
+        volumes = np.abs(six_vol) / 6.0
+
+        if np.any(volumes <= 0.0):
+            warnings.warn(
+                "Detected zero or negative tetrahedron volume(s) during "
+                "projection; corresponding cell averages will be set to 0.",
+                UserWarning,
+            )
+
+        integrals = np.zeros(n_tets, dtype=float)
+        for i in range(n_tets):
+            tet = tetra_qp[:, i, :]  # shape (4, 3)
+            integrals[i] = scheme.integrate(function, tet)
+
+        # Convert integrals -> averages by dividing by volume (defensive)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            averages = np.where(volumes > 0.0, integrals / volumes, 0.0)
+
+        grid.cell_data[property_name] = averages.astype(np.float32)
 
     # ===== Private Helper Methods =====
 

@@ -196,7 +196,7 @@ model.mesh.project_function_on_mesh(f, property_name="dv")
 # model.mesh.mesh.cell_data["dv"] = integrals
 print("Cell data 'dv':", model.mesh.mesh.cell_data["dv"])
 
-travel_times = appl.mapping(model.mesh.mesh.cell_data["dv"])
+travel_times = appl._mapping(model.mesh.mesh.cell_data["dv"])
 
 # display dv using first source-receiver pair
 display_dv(srr[0,0][0], srr[0,0][1], srr[0,1][0], srr[0,1][1])
