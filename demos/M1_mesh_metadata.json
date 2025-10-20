@@ -6,12 +6,12 @@
   "properties": [
     "gmsh:physical",
     "gmsh:geometrical",
-    "layer_0-layer_1-gmsh:bounding_entities",
+    "layer_0-layer_1-layer_2-gmsh:bounding_entities",
     "region",
     "vp",
     "vs",
     "rho"
   ],
-  "n_cells": 9975,
-  "n_points": 2258
+  "n_cells": 6444,
+  "n_points": 1370
 }

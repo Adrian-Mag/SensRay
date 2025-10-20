@@ -706,6 +706,38 @@ class PlanetMesh:
 
     # ===== Visualization =====
 
+    def display_dv(self, source_lat, source_lon, receiver_lat, receiver_lon, property_name="vp"):
+        '''
+        Display the dv property on a cross-section plane defined by source and receiver
+        
+        Parameters
+        source_lat : tuple
+            Latitude of source
+        source_lon : tuple
+            Longitude of source
+        receiver_lon : tuple
+            Latitude of receiver
+        receiver_lon : tuple
+            Longitude of receiver
+        property_name : str
+            Property to colour by
+        '''
+        from .coordinates import CoordinateConverter
+
+        plane_normal = CoordinateConverter.compute_gc_plane_normal(
+            source_lat, source_lon, receiver_lat, receiver_lon
+        )
+
+        # Cross-section showing background Vp
+        print("Background P-wave velocity:")
+        plane_normal = plane_normal
+        plotter1 = self.plot_cross_section(
+            plane_normal=plane_normal,
+            property_name=property_name,
+        )
+        plotter1.camera.position = (8000, 6000, 10000)
+        plotter1.show()
+
     def plot_cross_section(self,
                            plane_normal=(0, 1, 0),
                            plane_origin=(0, 0, 0),
