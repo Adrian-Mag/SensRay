@@ -41,7 +41,7 @@ setup(
         "geographiclib>=2.1",
         "trame>=3.11",
         "trame-vtk>=2.10",
-        "trame-vuetify>=3.1"
+        "trame-vuetify>=3.1",
         "vtk>=9.0.1",
     ],
     extras_require={
