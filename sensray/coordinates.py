@@ -219,6 +219,64 @@ class CoordinateConverter:
         return x, y, z
 
     @staticmethod
+    def cartesian_to_spherical(
+        xyz: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Convert Cartesian coordinates to spherical (r, theta, phi).
+
+        Accepts any of the following shapes for ``xyz``:
+        - (N, 3) array where each row is (x, y, z)
+        - (3, N) array where each column is (x, y, z)
+        - length-3 vector (x, y, z)
+
+        Returns
+        -------
+        r : ndarray
+            Radial distance(s) from origin. Shape (N,) for multiple points
+            or scalar for single point.
+        theta : ndarray
+            Polar (colatitude) angle(s) in radians: 0 at +Z axis, in [0, pi].
+        phi : ndarray
+            Azimuthal angle(s) in radians in [0, 2*pi).
+        """
+        x = np.asarray(xyz)
+
+        # Single 3-vector
+        if x.ndim == 1 and x.shape[0] == 3:
+            X, Y, Z = x[0], x[1], x[2]
+            r = np.sqrt(X * X + Y * Y + Z * Z)
+            if r == 0:
+                theta = 0.0
+                phi = 0.0
+            else:
+                theta = float(np.arccos(np.clip(Z / r, -1.0, 1.0)))
+                phi = float(np.mod(np.arctan2(Y, X), 2 * np.pi))
+            # return numpy scalars/0-d arrays to match annotated return types
+            return np.array(r), np.array(theta), np.array(phi)
+
+        # 2D array: (N,3) or (3,N)
+        if x.ndim == 2:
+            if x.shape[1] == 3:
+                X = x[:, 0]
+                Y = x[:, 1]
+                Z = x[:, 2]
+            elif x.shape[0] == 3:
+                X = x[0]
+                Y = x[1]
+                Z = x[2]
+            else:
+                raise ValueError(f"Unexpected input shape for xyz: {x.shape}")
+
+            r = np.sqrt(X ** 2 + Y ** 2 + Z ** 2)
+            # theta: polar/colatitude angle
+            theta = np.where(r == 0, 0.0, np.arccos(np.clip(Z / r, -1.0, 1.0)))
+            # phi: azimuth in [0, 2pi)
+            phi = np.mod(np.arctan2(Y, X), 2 * np.pi)
+            return r, theta, phi
+
+        raise ValueError(f"Unexpected input shape for xyz: {x.shape}")
+
+    @staticmethod
     def compute_gc_plane_normal(
         lat1_deg: float,
         lon1_deg: float,
