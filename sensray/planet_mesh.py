@@ -755,7 +755,8 @@ class PlanetMesh:
 
         # if any parameter is None then try to calculate a plane normal
         """
-        Validates input combinations for source/receiver coordinates and plane normal.
+        Validates input combinations for source/receiver coordinates
+        and plane normal.
         Rules:
         - Either all 4 coordinates OR plane_normal must be provided.
         - Partial coordinates are invalid.
@@ -770,25 +771,34 @@ class PlanetMesh:
 
         # Rule 1: None provided
         if num_coords == 0 and not has_plane:
-            raise ValueError("You must provide either all coordinates or a plane normal.")
+            raise ValueError(
+                "You must provide either all coordinates or a plane normal."
+            )
 
         # Rule 2: Partial coordinates
         if 0 < num_coords < 4:
-            raise ValueError("Either all or none of the source/receiver coordinates must be provided.")
+            raise ValueError(
+                "Either all or none of the source/receiver coordinates "
+                "must be provided."
+            )
 
         # All coordinates
         if num_coords == 4:
             # Rule 3: All coordinates and plane normal
             if has_plane:
-                raise ValueError("Cannot provide both full coordinates and a plane normal at the same time.")
+                raise ValueError(
+                    "Cannot provide both full coordinates and a plane normal "
+                    "at the same time."
+                )
             else:
-                # calculate plane normal if user just passed in all source and receiver coordinates
+                # calculate plane normal if user just passed in all source and
+                # receiver coordinates
                 from .coordinates import CoordinateConverter
 
                 plane_normal = CoordinateConverter.compute_gc_plane_normal(
                     source_lat, source_lon, receiver_lat, receiver_lon
                 )
-        
+
         # Clip mesh
         clipped = self.mesh.clip(normal=plane_normal, origin=plane_origin)
 
