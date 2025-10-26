@@ -714,7 +714,7 @@ class PlanetModel:
         Parameters
         ----------
         mesh_type : str
-            Type of mesh to create: "tetrahedral".
+            Type of mesh to create: "tetrahedral" or "spherical".
             Ignored if from_file is provided.
         from_file : str, optional
             Path to load pre-saved mesh from (without extension).
@@ -754,7 +754,7 @@ class PlanetModel:
         from .planet_mesh import PlanetMesh
 
         if from_file is not None:
-            # Load mesh from file
+            # Load mesh from file (mesh_type auto-detected from metadata)
             self._mesh = PlanetMesh.from_file(from_file, planet_model=self)
         else:
             # Generate new mesh
@@ -762,10 +762,12 @@ class PlanetModel:
 
             if mesh_type == "tetrahedral":
                 self._mesh.generate_tetrahedral_mesh(**kwargs)
+            elif mesh_type == "spherical":
+                self._mesh.generate_spherical_mesh(**kwargs)
             else:
                 raise ValueError(
                     f"Unknown mesh type: {mesh_type}. "
-                    "Only 'tetrahedral' is supported."
+                    "Only 'tetrahedral' and 'spherical' are supported."
                 )
 
         # Optionally populate properties (after generation or load)
