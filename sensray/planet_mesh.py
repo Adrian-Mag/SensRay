@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Optional, Dict, List, Any, TYPE_CHECKING, Callable
 import quadpy
 if TYPE_CHECKING:
-    from .model import PlanetModel
+    from .planet_model import PlanetModel
 import numpy as np
 import warnings
 
@@ -47,20 +47,39 @@ class PlanetMesh:
     """
 
     def __init__(self, planet_model, mesh_type: str = "tetrahedral"):
-        if pv is None:  # pragma: no cover
-            raise ImportError(
-                "PyVista is required for mesh operations. "
-                "Install with `pip install pyvista`."
+        if mesh_type == "tetrahedral":
+            if pv is None:  # pragma: no cover
+                raise ImportError(
+                    "PyVista is required for tetrahedral mesh operations. "
+                    "Install with `pip install pyvista`."
+                )
+        elif mesh_type not in ["tetrahedral", "spherical"]:
+            raise ValueError(
+                f"Unsupported mesh type: {mesh_type}. "
+                "Supported types: 'tetrahedral', 'spherical'"
             )
-
-        if mesh_type != "tetrahedral":
-            raise ValueError("Only tetrahedral mesh type is supported")
 
         self.planet_model = planet_model
         self.mesh_type = mesh_type
-        self.mesh = None  # PyVista UnstructuredGrid
+        self.mesh = None  # PyVista UnstructuredGrid or SphericalPlanetMesh
 
     # ===== Mesh Generation =====
+
+    def generate_spherical_mesh(self, radii: List[float]) -> None:
+        """
+        Generate a simple 1D spherical mesh with radial layers.
+
+        Parameters
+        ----------
+        radii : list of float
+            List of layer boundary radii in km (e.g., [6371, 3480, 1220])
+        """
+        self.mesh_type = "spherical"
+        self.mesh = SphericalPlanetMesh(radii=radii)
+        print(
+            f"Generated spherical mesh: {self.mesh.n_cells} layers, "
+            f"{self.mesh.n_points} boundaries"
+        )
 
     def generate_tetrahedral_mesh(self,
                                   mesh_size_km: float = 200.0,
@@ -311,16 +330,33 @@ class PlanetMesh:
                 "No mesh generated. Call generate_*_mesh() first."
             )
 
-        for prop in properties:
-            # Compute and store property averages per cell via quadrature.
-            # project_function_on_mesh expects (function, property_name) and
-            # stores the result into mesh.cell_data[property_name].
-            self.project_function_on_mesh(
-                lambda pts: self.planet_model.get_property_at_3d_points(
-                    prop, pts
-                ),
-                prop,
-            )
+        if isinstance(self.mesh, SphericalPlanetMesh):
+            # For spherical mesh: sample at layer midpoints (radially)
+            for prop in properties:
+                values = []
+                for i in range(self.mesh.n_cells):
+                    r_outer = self.mesh.radii[i]
+                    r_inner = self.mesh.radii[i + 1]
+                    r_mid = 0.5 * (r_outer + r_inner)
+                    # Sample at arbitrary point on sphere of radius r_mid
+                    # (radially symmetric, direction doesn't matter)
+                    value = self.planet_model.get_property_at_radius(
+                        prop, r_mid
+                    )
+                    values.append(value)
+                self.mesh.cell_data[prop] = np.array(values)
+        else:
+            # For tetrahedral mesh: use quadrature integration
+            for prop in properties:
+                # Compute and store property averages per cell via quadrature
+                # project_function_on_mesh expects (function, property_name)
+                # and stores the result into mesh.cell_data[property_name].
+                self.project_function_on_mesh(
+                    lambda pts: self.planet_model.get_property_at_3d_points(
+                        prop, pts
+                    ),
+                    prop,
+                )
 
         print(f"Populated properties: {properties}")
 
@@ -1363,21 +1399,28 @@ class PlanetMesh:
         ----------
         path : str
             Base path for saving (without extension). Will create:
-            - {path}.vtu - the mesh data
-            - {path}_metadata.json - mesh generation parameters and metadata
+            - For tetrahedral: {path}.vtu + {path}_metadata.json
+            - For spherical: {path}.npz + {path}_metadata.json
 
         Examples
         --------
-        >>> mesh.save("my_mesh")  # Creates .vtu and _metadata.json files
+        >>> mesh.save("my_mesh")  # Creates files based on mesh type
         """
         if self.mesh is None:
             raise ValueError("No mesh to save. Generate a mesh first.")
 
         import json
+        import os
 
-        # Save mesh data as VTU (VTK Unstructured Grid format)
-        mesh_path = f"{path}.vtu"
-        self.mesh.save(mesh_path)
+        base_path = os.path.splitext(path)[0]  # Remove extension if present
+
+        # Save mesh data based on type
+        if isinstance(self.mesh, SphericalPlanetMesh):
+            mesh_path = self.mesh.save(base_path)
+        else:
+            # PyVista tetrahedral mesh
+            mesh_path = f"{base_path}.vtu"
+            self.mesh.save(mesh_path)
 
         # Save metadata as JSON sidecar
         metadata = {
@@ -1392,7 +1435,7 @@ class PlanetMesh:
             "n_points": self.mesh.n_points,
         }
 
-        metadata_path = f"{path}_metadata.json"
+        metadata_path = f"{base_path}_metadata.json"
         with open(metadata_path, 'w') as f:
             json.dump(metadata, f, indent=2)
 
@@ -1412,8 +1455,8 @@ class PlanetMesh:
         ----------
         path : str
             Base path for loading (without extension). Expects:
-            - {path}.vtu - the mesh data
-            - {path}_metadata.json - mesh generation parameters and metadata
+            - Tetrahedral: {path}.vtu + {path}_metadata.json
+            - Spherical: {path}.npz + {path}_metadata.json
         planet_model : PlanetModel, optional
             Planet model to associate with the loaded mesh. If None,
             attempts to recreate from metadata.
@@ -1430,18 +1473,10 @@ class PlanetMesh:
         import json
         import os
 
-        if pv is None:  # pragma: no cover
-            raise ImportError("PyVista is required to load mesh files.")
+        base_path = os.path.splitext(path)[0]  # Remove extension if present
 
-        # Load mesh data
-        mesh_path = f"{path}.vtu"
-        if not os.path.exists(mesh_path):
-            raise FileNotFoundError(f"Mesh file not found: {mesh_path}")
-
-        grid = pv.read(mesh_path)
-
-        # Load metadata
-        metadata_path = f"{path}_metadata.json"
+        # Load metadata first to determine mesh type
+        metadata_path = f"{base_path}_metadata.json"
         metadata = {}
         if os.path.exists(metadata_path):
             with open(metadata_path, 'r') as f:
@@ -1449,11 +1484,14 @@ class PlanetMesh:
         else:
             warnings.warn(f"Metadata file not found: {metadata_path}")
 
+        # Determine mesh type
+        mesh_type = metadata.get('mesh_type', 'tetrahedral')
+
         # Create or validate planet model
         if planet_model is None:
             # Try to recreate from metadata
             if 'planet_model_name' in metadata:
-                from .model import PlanetModel
+                from .planet_model import PlanetModel
                 try:
                     planet_model = PlanetModel.from_standard_model(
                         metadata['planet_model_name']
@@ -1466,19 +1504,39 @@ class PlanetMesh:
                     )
                     planet_model = PlanetModel.from_standard_model('prem')
             else:
-                from .model import PlanetModel
+                from .planet_model import PlanetModel
                 planet_model = PlanetModel.from_standard_model('prem')
                 warnings.warn(
                     "No planet model metadata found. Using default PREM."
                 )
 
-        # Create mesh instance
-        mesh_type = metadata.get('mesh_type', 'tetrahedral')
-        if mesh_type != 'tetrahedral':
+        # Load mesh data based on type
+        if mesh_type == 'spherical':
+            mesh_path = f"{base_path}.npz"
+            if not os.path.exists(mesh_path):
+                raise FileNotFoundError(f"Mesh file not found: {mesh_path}")
+
+            grid = SphericalPlanetMesh.load(base_path)
+
+        elif mesh_type == 'tetrahedral':
+            if pv is None:  # pragma: no cover
+                raise ImportError(
+                    "PyVista is required to load tetrahedral meshes."
+                )
+
+            mesh_path = f"{base_path}.vtu"
+            if not os.path.exists(mesh_path):
+                raise FileNotFoundError(f"Mesh file not found: {mesh_path}")
+
+            grid = pv.read(mesh_path)
+
+        else:
             raise ValueError(
-                f"Unsupported mesh type: {mesh_type}. "
-                "Only tetrahedral meshes are supported."
+                f"Unsupported mesh type in metadata: {mesh_type}. "
+                "Supported types: 'tetrahedral', 'spherical'"
             )
+
+        # Create mesh instance
         instance = cls(planet_model, mesh_type=mesh_type)
         instance.mesh = grid
 
@@ -1489,3 +1547,155 @@ class PlanetMesh:
             print(f"Loaded metadata: {n_cells} cells, {n_points} points")
 
         return instance
+
+
+class SphericalPlanetMesh():
+    """
+    Simple 1D spherical mesh for radially-symmetric planet models.
+
+    Stores properties at discrete radial layers. Compatible with
+    PlanetMesh interface for unified save/load operations.
+
+    Parameters
+    ----------
+    radii : list of float
+        List of layer boundary radii in km, from surface to center.
+
+    Examples
+    --------
+    >>> mesh = SphericalPlanetMesh(radii=[6371, 3480, 1220])
+    >>> mesh.cell_data['vp'] = np.array([8.0, 13.0])  # 2 layers
+    """
+
+    def __init__(self, radii: List[float]):
+        """Initialize a spherical planet mesh with given layer radii.
+
+        Parameters
+        ----------
+        radii : list of float
+            List of layer boundary radii in km, from surface to center.
+        """
+        self.radii = sorted(radii, reverse=True)  # Ensure descending order
+        self._cell_data = {}
+        self._point_data = {}
+
+    @property
+    def n_cells(self) -> int:
+        """Number of cells (layers) in the mesh."""
+        return max(0, len(self.radii) - 1)
+
+    @property
+    def n_points(self) -> int:
+        """Number of points (layer boundaries) in the mesh."""
+        return len(self.radii)
+
+    def get_layer_radius(self, index: int) -> float:
+        """Get the radius of the layer boundary at the given index.
+
+        Parameters
+        ----------
+        index : int
+            Index of the layer boundary (0 = outermost).
+
+        Returns
+        -------
+        float
+            Radius of the layer boundary in km.
+        """
+        if index < 0 or index >= len(self.radii):
+            raise IndexError("Layer index out of range.")
+        return self.radii[index]
+
+    @property
+    def cell_data(self) -> Dict[str, np.ndarray]:
+        """Dictionary to store cell data properties."""
+        return self._cell_data
+
+    @cell_data.setter
+    def cell_data(self, value: Dict[str, np.ndarray]) -> None:
+        """Set cell data properties."""
+        if not isinstance(value, dict):
+            raise TypeError("cell_data must be a dictionary")
+        self._cell_data = value
+
+    @property
+    def point_data(self) -> Dict[str, np.ndarray]:
+        """Dictionary to store point data properties."""
+        return self._point_data
+
+    @point_data.setter
+    def point_data(self, value: Dict[str, np.ndarray]) -> None:
+        """Set point data properties."""
+        if not isinstance(value, dict):
+            raise TypeError("point_data must be a dictionary")
+        self._point_data = value
+
+    def save(self, path: str) -> str:
+        """
+        Save spherical mesh to numpy format.
+
+        Parameters
+        ----------
+        path : str
+            Path to save file (will use .npz extension)
+
+        Returns
+        -------
+        str
+            Path to saved file
+        """
+        import os
+        base_path = os.path.splitext(path)[0]  # Remove extension if present
+        save_path = f"{base_path}.npz"
+
+        # Prepare data dictionary
+        data = {
+            'radii': np.array(self.radii),
+        }
+
+        # Add cell data with prefix
+        for key, val in self._cell_data.items():
+            data[f'cell_data_{key}'] = np.asarray(val)
+
+        # Add point data with prefix
+        for key, val in self._point_data.items():
+            data[f'point_data_{key}'] = np.asarray(val)
+
+        np.savez_compressed(save_path, **data)
+        return save_path
+
+    @classmethod
+    def load(cls, path: str) -> 'SphericalPlanetMesh':
+        """
+        Load spherical mesh from numpy format.
+
+        Parameters
+        ----------
+        path : str
+            Path to load file (.npz)
+
+        Returns
+        -------
+        SphericalPlanetMesh
+            Loaded mesh instance
+        """
+        import os
+        base_path = os.path.splitext(path)[0]  # Remove extension if present
+        load_path = f"{base_path}.npz"
+
+        data = np.load(load_path)
+        radii = data['radii'].tolist()
+
+        mesh = cls(radii=radii)
+
+        # Load cell data
+        for key in data.keys():
+            if key.startswith('cell_data_'):
+                prop_name = key[len('cell_data_'):]
+                mesh._cell_data[prop_name] = data[key]
+            elif key.startswith('point_data_'):
+                prop_name = key[len('point_data_'):]
+                mesh._point_data[prop_name] = data[key]
+
+        return mesh
+
