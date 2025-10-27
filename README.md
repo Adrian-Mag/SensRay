@@ -84,8 +84,8 @@ Pre-generated demo meshes are present as VTU files in `demos/` for quick testing
 1. Create or load a PlanetModel: `PlanetModel.from_standard_model('prem')` or `PlanetModel('file.nd')`.
 2. Generate a mesh: `model.create_mesh(mesh_type='tetrahedral', mesh_size_km=200.0)`.
 3. Populate properties and optionally save mesh: `mesh.populate_properties(['vp','vs'])`, `mesh.save('my_mesh')`.
-4. Compute ray paths with ObsPy/TauP (not provided by this package) and use `mesh.compute_ray_lengths_from_arrival(...)` to map the ray into cell lengths.
-5. Compute sensitivity kernels with `mesh.compute_sensitivity_kernel(...)` or batch with `compute_sensitivity_kernels_for_rays(...)`.
+4. Compute ray paths with ObsPy/TauP (not provided by this package) and use `mesh.compute_ray_lengths(...)` to map the ray into cell lengths.
+5. Compute sensitivity kernels with `mesh.compute_sensitivity_kernel(...)` which handles both single and multiple rays.
 
 ## Notes for contributors
 
