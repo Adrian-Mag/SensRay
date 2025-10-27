@@ -333,20 +333,15 @@ class PlanetMesh:
             )
 
         if isinstance(self.mesh, SphericalPlanetMesh):
-            # For spherical mesh: sample at layer midpoints (radially)
+            # For spherical mesh: use proper radial integration projection
             for prop in properties:
-                values = []
-                for i in range(self.mesh.n_cells):
-                    r_outer = self.mesh.radii[i]
-                    r_inner = self.mesh.radii[i + 1]
-                    r_mid = 0.5 * (r_outer + r_inner)
-                    # Sample at arbitrary point on sphere of radius r_mid
-                    # (radially symmetric, direction doesn't matter)
-                    value = self.planet_model.get_property_at_radius(
-                        prop, r_mid
-                    )
-                    values.append(value)
-                self.mesh.cell_data[prop] = np.array(values)
+                # Project via volume-weighted integration: (1/V) ∫ f(r) r^2 dr
+                self.project_function_on_mesh(
+                    lambda r: self.planet_model.get_property_at_radius(
+                        prop, r
+                    ),
+                    prop,
+                )
         else:
             # For tetrahedral mesh: use quadrature integration
             for prop in properties:
@@ -364,128 +359,109 @@ class PlanetMesh:
 
     # ===== Ray Tracing =====
 
-    def compute_ray_lengths(self, ray: Any) -> np.ndarray:
-        """
-        Compute per-cell path lengths from an ObsPy ray object.
-
-        Parameters
-        ----------
-        ray : obspy.taup.ray_paths.RayPath
-            Ray from model.get_ray_paths_geo() containing path with
-            depth, lat, lon
-
-        Returns
-        -------
-        np.ndarray
-            Per-cell path lengths in km
-        """
-        if self.mesh is None:
-            raise RuntimeError(
-                "No mesh generated. Call generate_*_mesh() first."
-            )
-
-        # Extract xyz coordinates from ray path
-        path_points = []
-        for point in ray.path:
-            depth_km = point['depth']  # km below surface
-            lat_deg = point['lat']     # degrees
-            lon_deg = point['lon']     # degrees
-
-            # Convert to Cartesian coordinates
-            from .coordinates import CoordinateConverter
-            xyz = CoordinateConverter.earth_to_cartesian(
-                lat_deg, lon_deg, depth_km,
-                earth_radius=self.planet_model.radius
-            )
-            path_points.append(xyz)
-        path_points = np.asarray(path_points, dtype=float)
-        # Compute per-cell intersections using midpoint-densify method
-        return self._compute_ray_cell_lengths_midpoint(path_points)
-
-    def compute_multiple_ray_lengths(self, rays: List[Any]) -> np.ndarray:
-        """
-        Compute per-cell lengths for multiple rays.
-
-        Parameters
-        ----------
-        rays : List[RayPath]
-            List of ObsPy ray objects
-
-        Returns
-        -------
-        np.ndarray
-            Array of shape (n_rays, n_cells) with per-cell lengths
-        """
-        lengths = []
-        for ray in rays:
-            lengths.append(self.compute_ray_lengths(ray))
-        return np.array(lengths)
-
-    def compute_ray_lengths_from_arrival(
+    def compute_ray_lengths(
         self,
         arrival: Any,
         store_as: Optional[str] = None,
         replace_existing: bool = True
     ) -> np.ndarray:
         """
-        Compute per-cell path lengths from an ObsPy Arrival object and
-        optionally store as mesh cell data.
+        Compute per-cell path lengths from ObsPy ray object(s).
 
-        Works for both tetrahedral (3D) and spherical (1D) meshes:
-        - Tetrahedral: requires lat/lon/depth from get_ray_paths_geo
-        - Spherical: can use depth-only from get_ray_paths or
-          lat/lon/depth from get_ray_paths_geo
+        Works for both tetrahedral (3D) and spherical (1D) meshes.
+        Handles single rays or multiple rays automatically.
 
         Parameters
         ----------
-        arrival : obspy.core.event.origin.Arrival or ray object
-            Arrival object or ray object with 'path' attribute containing
-            ray path points. For spherical meshes, only 'depth' field is
-            required. For tetrahedral meshes, 'lat', 'lon', 'depth' needed.
+        arrival : ray object or List[ray objects]
+            Single ray or list of rays from TauP with 'path' attribute.
+            - For spherical meshes: only 'depth' field required
+            - For tetrahedral meshes: 'lat', 'lon', 'depth' needed
         store_as : str, optional
             If provided, store as cell data with this name.
+            Only valid for single rays (raises ValueError for multiple rays).
             If None, lengths are computed but not stored.
         replace_existing : bool
             If True, replace existing cell data with the same name.
             If False and cell data exists, raise ValueError.
+            Only used when store_as is not None.
 
         Returns
         -------
         np.ndarray
-            Per-cell path lengths in km
+            - Single ray: 1D array of shape (n_cells,) with per-cell lengths
+            - Multiple rays: 2D array of shape (n_rays, n_cells)
 
-    Examples
-    --------
-    # Spherical mesh (1D)
-    rays = model.get_ray_paths(...)  # depth only
-    mesh.compute_ray_lengths_from_arrival(rays[0])
+        Raises
+        ------
+        ValueError
+            If store_as is provided for multiple rays (cell_data storage
+            only supported for single rays)
 
-    # Tetrahedral mesh (3D)
-    rays = model.get_ray_paths_geo(...)  # lat/lon/depth
-    mesh.compute_ray_lengths_from_arrival(rays[0])
+        Examples
+        --------
+        # Single ray
+        rays = model.get_ray_paths(...)
+        lengths = mesh.compute_ray_lengths(rays[0])
+
+        # Multiple rays
+        all_lengths = mesh.compute_ray_lengths(rays)  # (n_rays, n_cells)
+
+        # Store single ray in cell_data
+        mesh.compute_ray_lengths(rays[0], store_as='P_wave_lengths')
+
+        Notes
+        -----
+        - For tetrahedral meshes: requires lat/lon/depth from
+          get_ray_paths_geo()
+        - For spherical meshes: works with depth-only from get_ray_paths()
         """
         if self.mesh is None:
             raise RuntimeError(
                 "No mesh generated. Call generate_*_mesh() first."
             )
 
-        # Dispatch based on mesh type
-        if isinstance(self.mesh, SphericalPlanetMesh):
-            lengths = self._compute_ray_lengths_spherical(arrival)
+        # Detect if we have multiple rays
+        is_multiple = isinstance(arrival, (list, tuple))
+
+        if is_multiple and store_as is not None:
+            raise ValueError(
+                "store_as parameter not supported for multiple rays. "
+                "To store multiple ray lengths, compute them individually:\n"
+                "  for i, ray in enumerate(rays):\n"
+                "      mesh.compute_ray_lengths(ray, store_as=f'ray_{i}')"
+            )
+
+        if is_multiple:
+            # Handle multiple rays - return 2D array
+            lengths = []
+            for ray in arrival:
+                # Dispatch based on mesh type
+                if isinstance(self.mesh, SphericalPlanetMesh):
+                    ray_lengths = self._compute_ray_lengths_spherical(ray)
+                else:
+                    ray_lengths = self._compute_ray_lengths_tetrahedral(ray)
+                lengths.append(ray_lengths)
+            return np.array(lengths)
         else:
-            lengths = self._compute_ray_lengths_tetrahedral(arrival)
+            # Handle single ray
+            # Dispatch based on mesh type
+            if isinstance(self.mesh, SphericalPlanetMesh):
+                lengths = self._compute_ray_lengths_spherical(arrival)
+            else:
+                lengths = self._compute_ray_lengths_tetrahedral(arrival)
 
-        # Store as cell data if requested
-        if store_as is not None:
-            if store_as in self.mesh.cell_data and not replace_existing:
-                raise ValueError(
-                    f"Cell data '{store_as}' already exists. "
-                    "Set replace_existing=True to overwrite."
-                )
-            self.mesh.cell_data[store_as] = lengths.astype(np.float32)
-            print(f"Stored ray path lengths as cell data: '{store_as}'")
+            # Store as cell data if requested
+            if store_as is not None:
+                if store_as in self.mesh.cell_data and not replace_existing:
+                    raise ValueError(
+                        f"Cell data '{store_as}' already exists. "
+                        "Set replace_existing=True to overwrite."
+                    )
+                self.mesh.cell_data[store_as] = lengths.astype(np.float32)
+                print(f"Stored ray path lengths as cell data: '{store_as}'")
 
-        return lengths
+            return lengths
 
     def add_ray_to_mesh(
         self,
@@ -533,7 +509,7 @@ class PlanetMesh:
             cell_data_name = f"ray_{ray_name}_lengths"
 
         # Compute and store
-        lengths = self.compute_ray_lengths_from_arrival(
+        lengths = self.compute_ray_lengths(
             arrival, store_as=cell_data_name, replace_existing=True
         )
 
@@ -546,22 +522,35 @@ class PlanetMesh:
         arrival: Any,
         property_name: str,
         attach_name: Optional[str] = None,
+        accumulate: Optional[str] = None,
         epsilon: float = 1e-6,
         replace_existing: bool = True
     ) -> np.ndarray:
         """
-        Compute sensitivity kernel K = -L / (prop^2 + epsilon) per cell.
+        Compute sensitivity kernel(s) K = -L / (prop^2 + epsilon) per cell.
+
+        Works for both tetrahedral and spherical meshes. Handles single rays
+        or multiple rays automatically.
 
         Parameters
         ----------
-        arrival : obspy ray object or array-like
-            Ray object from TauP with path information, or array of
-            Cartesian points (N,3)
+        arrival : ray object or List[ray objects]
+            Single ray or list of rays from TauP with path information.
+            Works for both mesh types.
         property_name : str
             Name of seismic property ('vp', 'vs', 'rho', etc.)
             Must exist in mesh.cell_data or will be populated from model
         attach_name : str, optional
-            Name to store kernel as cell data. If None, uses default.
+            Name to store kernel as cell data.
+            - Single ray: stores as-is (default: f"K_{property_name}")
+            - Multiple rays with accumulate='sum': stores sum
+              (default: f"Ksum_{property_name}")
+            - Multiple rays with accumulate=None: stores with _i suffix
+              (default: f"K_{property_name}_{{i}}")
+        accumulate : str or None, optional
+            Only used for multiple rays. If "sum", returns and stores sum of
+            all kernels. If None, returns (n_rays, n_cells) array.
+            Ignored for single ray.
         epsilon : float
             Small regularizer added to denominator to avoid division by zero
         replace_existing : bool
@@ -570,11 +559,28 @@ class PlanetMesh:
         Returns
         -------
         np.ndarray
-            Sensitivity kernel array (length n_cells)
+            - Single ray: 1D array of shape (n_cells,) with kernel values
+            - Multiple rays with accumulate='sum': 1D array (n_cells,)
+            - Multiple rays with accumulate=None: 2D array (n_rays, n_cells)
 
-    Examples
-    --------
-    kernel = mesh.compute_sensitivity_kernel(ray_obj, 'vp')
+        Examples
+        --------
+        # Single ray
+        kernel = mesh.compute_sensitivity_kernel(ray, 'vp')
+
+        # Multiple rays - return sum
+        K_sum = mesh.compute_sensitivity_kernel(rays, 'vp', accumulate='sum')
+
+        # Multiple rays - return individual kernels
+        K_all = mesh.compute_sensitivity_kernel(rays, 'vp', accumulate=None)
+
+        # Store with custom name
+        mesh.compute_sensitivity_kernel(ray, 'vp', attach_name='my_kernel')
+
+        Notes
+        -----
+        The sensitivity kernel relates travel time perturbations to velocity
+        perturbations: δt = ∫ K δv dx, where K = -L/v² and L is path length.
         """
         if self.mesh is None:
             raise RuntimeError(
@@ -585,138 +591,83 @@ class PlanetMesh:
         if property_name not in self.mesh.cell_data:
             self.populate_properties([property_name])
 
-        # Compute ray path lengths
-        lengths = self.compute_ray_lengths_from_arrival(
-            arrival, store_as=None, replace_existing=False
-        )
-        print(lengths)
-
-        # Get property values (per cell)
+        # Get property values (per cell) - same for all rays
         prop = np.asarray(self.mesh.cell_data[property_name], dtype=float)
 
-        # Compute kernel: K = -L / (prop^2 + epsilon)
+        # Pre-compute denominator for efficiency
         denom = prop * prop + float(epsilon)
         valid = np.isfinite(denom) & (denom > 0.0)
 
-        kernel = np.zeros_like(lengths, dtype=float)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            kernel[valid] = -lengths[valid] / denom[valid]
+        # Detect if we have multiple rays
+        is_multiple = isinstance(arrival, (list, tuple))
 
-        # Store as cell data if requested
-        if attach_name is None:
-            attach_name = f"K_{property_name}"
+        if is_multiple:
+            # Handle multiple rays
+            kernels = []
+            for ray in arrival:
+                # Compute ray path lengths
+                lengths = self.compute_ray_lengths(ray)
 
-        if attach_name in self.mesh.cell_data and not replace_existing:
-            raise ValueError(
-                f"Cell data '{attach_name}' already exists. "
-                "Set replace_existing=True to overwrite."
-            )
+                # Compute kernel: K = -L / (prop^2 + epsilon)
+                kernel = np.zeros_like(lengths, dtype=float)
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    kernel[valid] = -lengths[valid] / denom[valid]
 
-        self.mesh.cell_data[attach_name] = kernel.astype(np.float32)
-        print(f"Stored sensitivity kernel as cell data: '{attach_name}'")
+                kernels.append(kernel)
 
-        return kernel
+            K_array = np.array(kernels)  # Shape: (n_rays, n_cells)
 
-    def compute_sensitivity_kernels_for_rays(
-        self,
-        arrivals: List[Any],
-        property_name: str,
-        attach_name: Optional[str] = None,
-        accumulate: Optional[str] = "sum",
-        epsilon: float = 1e-6,
-        replace_existing: bool = True
-    ) -> np.ndarray:
-        """
-    Compute sensitivity kernels for multiple rays and optionally
-    accumulate.
-
-        Parameters
-        ----------
-        arrivals : List[ray objects]
-            List of ray objects from TauP with path information
-        property_name : str
-            Name of seismic property ('vp', 'vs', 'rho', etc.)
-        attach_name : str, optional
-            Base name for storing kernels. If accumulate='sum', stores single
-            array. If accumulate=None, stores individual arrays with suffix.
-            If None, uses f"Ksum_{property_name}" or f"K_{property_name}_{{i}}"
-        accumulate : str or None
-            If "sum", return and store sum of all kernels.
-            If None, return (n_rays, n_cells) array and store individual
-            kernels
-        epsilon : float
-            Small regularizer for denominator
-        replace_existing : bool
-            Whether to replace existing cell data
-
-        Returns
-        -------
-        np.ndarray
-            If accumulate='sum': 1D array (n_cells,) with summed kernels
-            If accumulate=None: 2D array (n_rays, n_cells)
-
-    Examples
-    --------
-    Ksum = mesh.compute_sensitivity_kernels_for_rays(rays, 'vp')
-        """
-        if self.mesh is None:
-            raise RuntimeError(
-                "No mesh generated. Call generate_*_mesh() first."
-            )
-
-        # Ensure property exists once
-        if property_name not in self.mesh.cell_data:
-            self.populate_properties([property_name])
-
-        # Compute kernels for each ray (don't store individual kernels)
-        kernels = []
-        for i, arrival in enumerate(arrivals):
+            if accumulate == "sum":
+                # Sum all kernels
+                K_sum = K_array.sum(axis=0)
+                name = attach_name or f"Ksum_{property_name}"
+                if name in self.mesh.cell_data and not replace_existing:
+                    raise ValueError(
+                        f"Cell data '{name}' already exists. "
+                        "Set replace_existing=True to overwrite."
+                    )
+                self.mesh.cell_data[name] = K_sum.astype(np.float32)
+                print(
+                    f"Stored summed sensitivity kernel as cell data: '{name}'"
+                )
+                return K_sum
+            else:
+                # Return individual kernels, optionally store
+                if attach_name is not None:
+                    base_name = attach_name or f"K_{property_name}"
+                    for i, kernel in enumerate(kernels):
+                        name = f"{base_name}_{i}"
+                        if (name in self.mesh.cell_data and
+                                not replace_existing):
+                            continue  # Skip if exists and not replacing
+                        self.mesh.cell_data[name] = kernel.astype(np.float32)
+                    msg = (
+                        f"Stored {len(kernels)} individual kernels with "
+                        f"base name: '{base_name}_*'"
+                    )
+                    print(msg)
+                return K_array
+        else:
+            # Handle single ray
             # Compute ray path lengths
-            lengths = self.compute_ray_lengths_from_arrival(
-                arrival, store_as=None, replace_existing=False
-            )
-
-            # Get property values (per cell)
-            prop = np.asarray(self.mesh.cell_data[property_name], dtype=float)
+            lengths = self.compute_ray_lengths(arrival)
 
             # Compute kernel: K = -L / (prop^2 + epsilon)
-            denom = prop * prop + float(epsilon)
-            valid = np.isfinite(denom) & (denom > 0.0)
-
             kernel = np.zeros_like(lengths, dtype=float)
             with np.errstate(divide="ignore", invalid="ignore"):
                 kernel[valid] = -lengths[valid] / denom[valid]
 
-            kernels.append(kernel)
-
-        K_array = np.array(kernels)  # Shape: (n_rays, n_cells)
-
-        if accumulate == "sum":
-            Ksum = K_array.sum(axis=0)
-            name = attach_name or f"Ksum_{property_name}"
+            # Store as cell data
+            name = attach_name or f"K_{property_name}"
             if name in self.mesh.cell_data and not replace_existing:
                 raise ValueError(
                     f"Cell data '{name}' already exists. "
                     "Set replace_existing=True to overwrite."
                 )
-            self.mesh.cell_data[name] = Ksum.astype(np.float32)
-            print(f"Stored summed sensitivity kernel as cell data: '{name}'")
-            return Ksum
-        else:
-            # Store individual kernels if attach_name provided
-            if attach_name is not None:
-                base_name = attach_name or f"K_{property_name}"
-                for i, kernel in enumerate(kernels):
-                    name = f"{base_name}_{i}"
-                    if name in self.mesh.cell_data and not replace_existing:
-                        continue  # Skip if exists and not replacing
-                    self.mesh.cell_data[name] = kernel.astype(np.float32)
-                msg = (
-                    f"Stored {len(kernels)} individual kernels with base "
-                    f"name: '{base_name}_*'"
-                )
-                print(msg)
-            return K_array
+            self.mesh.cell_data[name] = kernel.astype(np.float32)
+            print(f"Stored sensitivity kernel as cell data: '{name}'")
+
+            return kernel
 
     # ===== Visualization =====
 
@@ -728,6 +679,9 @@ class PlanetMesh:
                            **kwargs) -> Any:
         """
         Plot cross-section using plane-based clipping.
+
+        Note: Only works with tetrahedral meshes. For spherical (1D) meshes,
+        use plot_shell_property() instead.
 
         Parameters
         ----------
@@ -750,6 +704,12 @@ class PlanetMesh:
         if self.mesh is None:
             raise RuntimeError(
                 "No mesh generated. Call generate_*_mesh() first."
+            )
+
+        if isinstance(self.mesh, SphericalPlanetMesh):
+            raise TypeError(
+                "plot_cross_section() only works with tetrahedral meshes. "
+                "For spherical (1D) meshes, use plot_shell_property() instead."
             )
 
         # Ensure property exists
@@ -789,6 +749,9 @@ class PlanetMesh:
         """
         Plot spherical shell at given radius.
 
+        Note: Only works with tetrahedral meshes. For spherical (1D) meshes,
+        use plot_shell_property() instead.
+
         Parameters
         ----------
         radius_km : float
@@ -806,6 +769,12 @@ class PlanetMesh:
         if self.mesh is None:
             raise RuntimeError(
                 "No mesh generated. Call generate_*_mesh() first."
+            )
+
+        if isinstance(self.mesh, SphericalPlanetMesh):
+            raise TypeError(
+                "plot_spherical_shell() only works with tetrahedral meshes. "
+                "For spherical (1D) meshes, use plot_shell_property() instead."
             )
 
         # Ensure property exists
