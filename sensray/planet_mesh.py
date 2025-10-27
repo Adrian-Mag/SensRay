@@ -612,6 +612,7 @@ class PlanetMesh:
         lengths = self.compute_ray_lengths_from_arrival(
             arrival, store_as=None, replace_existing=False
         )
+        print(lengths)
 
         # Get property values (per cell)
         prop = np.asarray(self.mesh.cell_data[property_name], dtype=float)
