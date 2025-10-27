@@ -8,7 +8,7 @@ refinement and unified visualization methods.
 
 from __future__ import annotations
 
-from typing import Optional, Dict, List, Any, TYPE_CHECKING, Callable
+from typing import Optional, Dict, List, Any, TYPE_CHECKING, Callable, Tuple
 import quadpy
 if TYPE_CHECKING:
     from .planet_model import PlanetModel
@@ -959,6 +959,62 @@ class PlanetMesh:
         return result
 
     def project_function_on_mesh(
+        self,
+        function: Callable[[np.ndarray], np.ndarray],
+        property_name: str,
+    ) -> None:
+        """
+        Project a scalar function onto the mesh cells via quadrature.
+
+        Parameters
+        ----------
+        function : Callable[[np.ndarray], np.ndarray]
+            Function that takes an array of shape (N,3) and returns
+            an array of shape (N,) with scalar values.
+        property_name : str
+            Name to store the projected property in mesh.cell_data.
+        """
+        if isinstance(self.mesh, SphericalPlanetMesh):
+            self.project_function_on_spherical_mesh(
+                function, property_name
+            )
+        else:
+            self.project_function_on_3D_mesh(
+                function, property_name
+            )
+
+    def _project_function_on_spherical_mesh(
+        self,
+        function: Callable[[np.ndarray], np.ndarray],
+        radii: np.ndarray,
+        epsabs: float = 1e-9,
+        epsrel: float = 1e-9,
+        limit: int = 50,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Adaptive quad per shell. f_scalar should accept float and return float.
+        Returns (integrals, denom) where integrals are ∫ f(r) r^2 dr.
+        """
+        radii = np.asarray(model.mesh.radii, dtype=float)
+        rL = radii[:-1]
+        rR = radii[1:]
+        N = rL.size
+        integrals = np.empty(N, dtype=float)
+
+        for i in range(N):
+            a = rL[i]
+            b = rR[i]
+            if b <= a:
+                integrals[i] = 0.0
+                continue
+            val, err = integrate.quad(lambda r: float(f_scalar(r)) * (r ** 2), a, b,
+                                    epsabs=epsabs, epsrel=epsrel, limit=limit)
+            integrals[i] = val
+
+        denom = (rR ** 3) - (rL ** 3)
+        return integrals, denom
+
+    def project_function_on_3D_mesh(
         self, function: Callable[[np.ndarray], np.ndarray],
         property_name: str,
     ) -> None:
