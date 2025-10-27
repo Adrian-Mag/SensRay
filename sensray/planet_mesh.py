@@ -8,7 +8,7 @@ refinement and unified visualization methods.
 
 from __future__ import annotations
 
-from typing import Optional, Dict, List, Any, TYPE_CHECKING, Callable, Tuple
+from typing import Optional, Dict, List, Any, TYPE_CHECKING, Callable
 import quadpy
 if TYPE_CHECKING:
     from .planet_model import PlanetModel
@@ -430,11 +430,17 @@ class PlanetMesh:
         Compute per-cell path lengths from an ObsPy Arrival object and
         optionally store as mesh cell data.
 
+        Works for both tetrahedral (3D) and spherical (1D) meshes:
+        - Tetrahedral: requires lat/lon/depth from get_ray_paths_geo
+        - Spherical: can use depth-only from get_ray_paths or
+          lat/lon/depth from get_ray_paths_geo
+
         Parameters
         ----------
         arrival : obspy.core.event.origin.Arrival or ray object
             Arrival object or ray object with 'path' attribute containing
-            ray path points with 'depth', 'lat', 'lon' keys
+            ray path points. For spherical meshes, only 'depth' field is
+            required. For tetrahedral meshes, 'lat', 'lon', 'depth' needed.
         store_as : str, optional
             If provided, store as cell data with this name.
             If None, lengths are computed but not stored.
@@ -449,55 +455,24 @@ class PlanetMesh:
 
     Examples
     --------
-    This method accepts an ObsPy ray or arrival with a `.path` list of
-    dicts having keys 'lat', 'lon', 'depth'.
+    # Spherical mesh (1D)
+    rays = model.get_ray_paths(...)  # depth only
+    mesh.compute_ray_lengths_from_arrival(rays[0])
+
+    # Tetrahedral mesh (3D)
+    rays = model.get_ray_paths_geo(...)  # lat/lon/depth
+    mesh.compute_ray_lengths_from_arrival(rays[0])
         """
         if self.mesh is None:
             raise RuntimeError(
                 "No mesh generated. Call generate_*_mesh() first."
             )
 
-        # Extract xyz coordinates from arrival/ray path
-        path_points = []
-
-        # Handle different types of input objects
-        if hasattr(arrival, 'path'):
-            # This is a ray object with path attribute
-            ray_path = arrival.path
-        elif hasattr(arrival, 'ray'):
-            # This might be an arrival with a ray attribute
-            ray_path = arrival.ray.path
+        # Dispatch based on mesh type
+        if isinstance(self.mesh, SphericalPlanetMesh):
+            lengths = self._compute_ray_lengths_spherical(arrival)
         else:
-            # Try to treat as path directly
-            ray_path = arrival
-
-        for point in ray_path:
-            if isinstance(point, dict):
-                depth_km = point['depth']  # km below surface
-                lat_deg = point['lat']     # degrees
-                lon_deg = point['lon']     # degrees
-            else:
-                # Handle numpy structured arrays from TauP
-                try:
-                    depth_km = float(point['depth'])  # km below surface
-                    lat_deg = float(point['lat'])     # degrees
-                    lon_deg = float(point['lon'])     # degrees
-                except (KeyError, TypeError):
-                    # Fallback: assume point has attributes depth, lat, lon
-                    depth_km = point.depth
-                    lat_deg = point.lat
-                    lon_deg = point.lon
-
-            # Convert to Cartesian coordinates
-            from .coordinates import CoordinateConverter
-            xyz = CoordinateConverter.earth_to_cartesian(
-                lat_deg, lon_deg, depth_km,
-                earth_radius=self.planet_model.radius
-            )
-            path_points.append(xyz)
-        path_points = np.asarray(path_points, dtype=float)
-        # Compute per-cell intersections using midpoint-densify method
-        lengths = self._compute_ray_cell_lengths_midpoint(path_points)
+            lengths = self._compute_ray_lengths_tetrahedral(arrival)
 
         # Store as cell data if requested
         if store_as is not None:
@@ -1008,10 +983,16 @@ class PlanetMesh:
             if b <= a:
                 integrals[i] = 0.0
                 continue
-            val, err = integrate.quad(lambda r: float(function(r)) * (r ** 2), a, b,
-                                      epsabs=epsabs,
-                                      epsrel=epsrel,
-                                      limit=limit)
+
+            def integrand(r):
+                return float(function(r)) * (r ** 2)
+
+            val, err = integrate.quad(
+                integrand, a, b,
+                epsabs=epsabs,
+                epsrel=epsrel,
+                limit=limit
+            )
             integrals[i] = val
 
         denom = (rR ** 3) - (rL ** 3)
@@ -1079,6 +1060,190 @@ class PlanetMesh:
         grid.cell_data[property_name] = averages.astype(np.float32)
 
     # ===== Private Helper Methods =====
+
+    def _compute_ray_lengths_tetrahedral(self, arrival: Any) -> np.ndarray:
+        """
+        Compute ray path lengths for tetrahedral mesh.
+
+        Requires lat/lon/depth from get_ray_paths_geo.
+        """
+        path_points = []
+
+        # Handle different types of input objects
+        if hasattr(arrival, 'path'):
+            ray_path = arrival.path
+        elif hasattr(arrival, 'ray'):
+            ray_path = arrival.ray.path
+        else:
+            ray_path = arrival
+
+        for point in ray_path:
+            if isinstance(point, dict):
+                depth_km = point['depth']
+                lat_deg = point['lat']
+                lon_deg = point['lon']
+            else:
+                # Handle numpy structured arrays from TauP
+                try:
+                    depth_km = float(point['depth'])
+                    lat_deg = float(point['lat'])
+                    lon_deg = float(point['lon'])
+                except (KeyError, TypeError):
+                    depth_km = point.depth
+                    lat_deg = point.lat
+                    lon_deg = point.lon
+
+            # Convert to Cartesian coordinates
+            from .coordinates import CoordinateConverter
+            xyz = CoordinateConverter.earth_to_cartesian(
+                lat_deg, lon_deg, depth_km,
+                earth_radius=self.planet_model.radius
+            )
+            path_points.append(xyz)
+
+        path_points = np.asarray(path_points, dtype=float)
+        return self._compute_ray_cell_lengths_midpoint(path_points)
+
+    def _compute_ray_lengths_spherical(self, arrival: Any) -> np.ndarray:
+        """
+        Compute ray path lengths for spherical (1D) mesh using exact
+        geometric intersection with shell boundaries.
+
+        Algorithm:
+        For each segment between consecutive ray points:
+        1. Form parametric line R(s) = P0 + s*(P1 - P0), s in [0,1]
+        2. Find intersections with shell boundaries: ||R(s)|| = R_shell
+        3. Solve resulting quadratic equation for each boundary
+        4. Distribute segment length proportionally to layers
+
+        Parameters
+        ----------
+        arrival : ray object
+            Ray with 'path' attribute containing depth information
+
+        Returns
+        -------
+        np.ndarray
+            Per-layer path lengths in km
+        """
+        # Extract path
+        if hasattr(arrival, 'path'):
+            ray_path = arrival.path
+        elif hasattr(arrival, 'ray'):
+            ray_path = arrival.ray.path
+        else:
+            ray_path = arrival
+
+        # Extract depths and convert to radii
+        depths = np.array([float(p['depth']) for p in ray_path])
+        radii = self.planet_model.radius - depths
+
+        # Get Cartesian positions (we need 3D positions for the math)
+        # For 1D rays, we can place them in an arbitrary plane
+        # Use lat=0, lon varies to create a 2D path in the equatorial plane
+        if 'dist' in ray_path.dtype.names:
+            # Use angular distance to compute positions
+            dists_rad = np.array([float(p['dist']) for p in ray_path])
+            # Convert to Cartesian in equatorial plane (z=0)
+            # x = r * cos(theta), y = r * sin(theta)
+            x = radii * np.cos(dists_rad)
+            y = radii * np.sin(dists_rad)
+            z = np.zeros_like(x)
+            points = np.column_stack([x, y, z])
+        else:
+            # Fallback: assume points lie along x-axis
+            # This is less accurate but works for vertical rays
+            points = np.column_stack([radii, np.zeros_like(radii),
+                                     np.zeros_like(radii)])
+
+        # Get shell boundary radii (sorted descending)
+        shell_radii = np.array(self.mesh.radii, dtype=float)
+
+        # Initialize lengths array
+        lengths = np.zeros(self.mesh.n_cells, dtype=float)
+
+        # Process each segment
+        for i in range(len(points) - 1):
+            P0 = points[i]
+            P1 = points[i + 1]
+            r0 = radii[i]
+            r1 = radii[i + 1]
+
+            # Segment vector and length
+            D = P1 - P0
+            seg_length = np.linalg.norm(D)
+
+            if seg_length < 1e-10:
+                continue
+
+            # Find which layers this segment crosses
+            r_min = min(r0, r1)
+            r_max = max(r0, r1)
+
+            # Find all shell boundaries in the range [r_min, r_max]
+            # These are the boundaries we need to find intersections with
+            boundaries_in_range = []
+            for j, R_shell in enumerate(shell_radii):
+                if r_min < R_shell < r_max:
+                    boundaries_in_range.append((j, R_shell))
+
+            # Find intersection parameters s for each boundary
+            # ||P0 + s*D||^2 = R_shell^2
+            # ||P0||^2 + 2*s*(P0·D) + s^2*||D||^2 = R_shell^2
+            # s^2*||D||^2 + 2*s*(P0·D) + (||P0||^2 - R_shell^2) = 0
+
+            D_sq = np.dot(D, D)
+            P0_dot_D = np.dot(P0, D)
+            P0_sq = np.dot(P0, P0)
+
+            s_values = [0.0]  # Start of segment
+
+            for _, R_shell in boundaries_in_range:
+                # Quadratic coefficients
+                a = D_sq
+                b = 2.0 * P0_dot_D
+                c = P0_sq - R_shell * R_shell
+
+                discriminant = b * b - 4 * a * c
+
+                if discriminant >= 0 and abs(a) > 1e-14:
+                    sqrt_disc = np.sqrt(discriminant)
+                    s1 = (-b - sqrt_disc) / (2 * a)
+                    s2 = (-b + sqrt_disc) / (2 * a)
+
+                    # Keep solutions in [0, 1]
+                    for s in [s1, s2]:
+                        if 0 < s < 1:
+                            s_values.append(s)
+
+            s_values.append(1.0)  # End of segment
+            s_values = sorted(set(s_values))  # Remove duplicates and sort
+
+            # Distribute segment length to layers
+            for j in range(len(s_values) - 1):
+                s_start = s_values[j]
+                s_end = s_values[j + 1]
+                s_mid = 0.5 * (s_start + s_end)
+
+                # Find which layer this sub-segment belongs to
+                P_mid = P0 + s_mid * D
+                r_mid = np.linalg.norm(P_mid)
+
+                # Find layer index for this radius
+                layer_idx = None
+                for k in range(self.mesh.n_cells):
+                    r_inner = shell_radii[k]
+                    r_outer = shell_radii[k + 1]
+                    if r_inner <= r_mid <= r_outer:
+                        layer_idx = k
+                        break
+
+                if layer_idx is not None:
+                    # Add proportional length to this layer
+                    sub_length = (s_end - s_start) * seg_length
+                    lengths[layer_idx] += sub_length
+
+        return lengths
 
     def _compute_polyline_cell_lengths_tetrahedral(
         self, points: np.ndarray
