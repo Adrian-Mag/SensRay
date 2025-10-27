@@ -236,3 +236,65 @@ plotter1 = model.mesh.plot_cross_section(plane_normal=(0, 1, 0), property_name="
 plotter1.camera.position = (8000, 6000, 10000)
 
 plotter1.show()
+
+
+# ----------------------------------------------------
+# Shell marching kernel
+# ----------------------------------------------------
+def find_shell_index(r, shell_radii):
+    for i in range(len(shell_radii) - 1):
+        if shell_radii[i] >= r > shell_radii[i + 1]:
+            return i
+    return None
+
+def interpolate_t(r0, r1, target):
+    if r1 == r0:
+        return 0.0
+    return (target - r0) / (r1 - r0)
+
+def compute_shell_contributions(r0, th0, r1, th1, contrib):
+    shell0 = find_shell_index(r0, shell_radii)
+    shell1 = find_shell_index(r1, shell_radii)
+
+    if shell0 is None or shell1 is None:
+        return
+
+    L_full = np.sqrt((r1 - r0)**2 + (model.radius * (th1 - th0))**2)
+
+    if shell0 == shell1:
+        contrib[shell0] += L_full
+        return
+
+    direction = int(np.sign(r0 - r1))
+    boundaries = []
+
+    if direction > 0:  # inward
+        for rad in shell_radii[shell0 + 1:shell1 + 1]:
+            boundaries.append(rad)
+    else:  # outward
+        for rad in shell_radii[shell1:shell0]:
+            boundaries.append(rad)
+
+    boundaries.append(r1)
+
+    prev_r, prev_th = r0, th0
+    current_shell = shell0
+
+    for boundary_r in boundaries:
+        t = np.clip(interpolate_t(r0, r1, boundary_r), 0, 1)
+        interp_r = r0 + (r1 - r0) * t
+        interp_th = th0 + (th1 - th0) * t
+
+        L = np.sqrt((interp_r - prev_r)**2 +
+                    (model.radius * (interp_th - prev_th))**2)
+
+        contrib[current_shell] += L
+
+        prev_r, prev_th = interp_r, interp_th
+        current_shell += direction
+
+
+lengths = np.zeros(len(shell_radii) - 1)
+for i in range(len(radius) - 1):
+        compute_shell_contributions(radius[i], dist[i],
+                                    radius[i + 1], dist[i + 1], lengths)
