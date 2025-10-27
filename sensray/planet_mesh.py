@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from .planet_model import PlanetModel
 import numpy as np
 import warnings
+from scipy import integrate
 
 try:  # Optional heavy deps
     import pyvista as pv
@@ -975,27 +976,27 @@ class PlanetMesh:
             Name to store the projected property in mesh.cell_data.
         """
         if isinstance(self.mesh, SphericalPlanetMesh):
-            self.project_function_on_spherical_mesh(
+            self._project_function_on_spherical_mesh(
                 function, property_name
             )
         else:
-            self.project_function_on_3D_mesh(
+            self._project_function_on_tetrahedra_mesh(
                 function, property_name
             )
 
     def _project_function_on_spherical_mesh(
         self,
         function: Callable[[np.ndarray], np.ndarray],
-        radii: np.ndarray,
+        property_name: str,
         epsabs: float = 1e-9,
         epsrel: float = 1e-9,
         limit: int = 50,
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> None:
         """
         Adaptive quad per shell. f_scalar should accept float and return float.
         Returns (integrals, denom) where integrals are ∫ f(r) r^2 dr.
         """
-        radii = np.asarray(model.mesh.radii, dtype=float)
+        radii = np.asarray(self.mesh.radii, dtype=float)
         rL = radii[:-1]
         rR = radii[1:]
         N = rL.size
@@ -1007,14 +1008,21 @@ class PlanetMesh:
             if b <= a:
                 integrals[i] = 0.0
                 continue
-            val, err = integrate.quad(lambda r: float(f_scalar(r)) * (r ** 2), a, b,
-                                    epsabs=epsabs, epsrel=epsrel, limit=limit)
+            val, err = integrate.quad(lambda r: float(function(r)) * (r ** 2), a, b,
+                                      epsabs=epsabs,
+                                      epsrel=epsrel,
+                                      limit=limit)
             integrals[i] = val
 
         denom = (rR ** 3) - (rL ** 3)
-        return integrals, denom
 
-    def project_function_on_3D_mesh(
+        # Place the computed projections into cell data
+        with np.errstate(divide='ignore', invalid='ignore'):
+            averages = np.where(denom > 0.0, (3.0 / denom) * integrals, 0.0)
+
+        self.mesh.cell_data[property_name] = averages.astype(np.float32)
+
+    def _project_function_on_tetrahedra_mesh(
         self, function: Callable[[np.ndarray], np.ndarray],
         property_name: str,
     ) -> None:
@@ -1024,7 +1032,7 @@ class PlanetMesh:
             raise RuntimeError(
                 "No mesh available. Call generate_*_mesh() first."
             )
-        cells = grid.cells
+        cells = grid.cells  #
         points = grid.points
 
         # Reshape flat cell array: each row [4, i0, i1, i2, i3]
@@ -1632,7 +1640,7 @@ class SphericalPlanetMesh():
         radii : list of float
             List of layer boundary radii in km, from surface to center.
         """
-        self.radii = sorted(radii, reverse=True)  # Ensure descending order
+        self.radii = sorted(radii)  # Ensure descending order
         self._cell_data = {}
         self._point_data = {}
 
