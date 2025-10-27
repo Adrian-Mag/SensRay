@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 import numpy as np
 import warnings
 from scipy import integrate
+import matplotlib.pyplot as plt
 
 try:  # Optional heavy deps
     import pyvista as pv
@@ -837,39 +838,61 @@ class PlanetMesh:
 
         return plotter
 
-    def plot_shell_property(radii, f_j, *,
+    def plot_shell_property(self,
+                            property_name: str, *,
                             show_shading=True,
-                            show_centers=True,
+                            show_centers=False,
                             annotate_radii=False,
                             figsize=(8, 4),
-                            title="Shell property on 1D spherical mesh"):
+                            title=None):
         """
-        Plot a property defined per-shell on a 1D spherical radial discretization.
+        Plot a property defined per-shell on a 1D spherical radial
+        discretization.
 
         Parameters
         ----------
-        radii : 1D array-like, length N+1
-            Shell edges: r_0, r_1, ..., r_N
-        f_j : 1D array-like, length N
-            Property value for each shell [r_j, r_{j+1})
-        show_shading : bool
+        property_name : str
+            Name of the property to plot (must exist in mesh.cell_data)
+        show_shading : bool, default=True
             Shade shells to make discretization clearer
-        show_centers : bool
+        show_centers : bool, default=False
             Show markers at shell centers
-        annotate_radii : bool
+        annotate_radii : bool, default=False
             Annotate radii values on the plot (may clutter if many shells)
+        figsize : tuple, default=(8, 4)
+            Figure size (width, height) in inches
+        title : str, optional
+            Plot title. If None, uses f"{property_name} on 1D spherical mesh"
+
+        Returns
+        -------
+        fig, ax : matplotlib Figure and Axes
+            The created figure and axes objects
+
+        Examples
+        --------
+        >>> model.mesh.plot_shell_property('vp')
+        >>> model.mesh.plot_shell_property('lengths', show_centers=True)
         """
-        radii = np.asarray(radii, dtype=float)
-        f_j = np.asarray(f_j, dtype=float)
-        if radii.ndim != 1 or radii.size < 2:
-            raise ValueError("radii must be 1D array with length >= 2")
-        if f_j.ndim != 1 or f_j.size != radii.size - 1:
-            raise ValueError("f_j must have length len(radii)-1")
+        if self.mesh_type != 'spherical':
+            raise TypeError(
+                f"plot_shell_property only works with spherical meshes, "
+                f"got mesh_type='{self.mesh_type}'"
+            )
+
+        if property_name not in self.mesh.cell_data:
+            raise ValueError(
+                f"Property '{property_name}' not found in mesh.cell_data. "
+                f"Available properties: {list(self.mesh.cell_data.keys())}"
+            )
+
+        radii = np.asarray(self.mesh.radii, dtype=float)
+        f_j = np.asarray(self.mesh.cell_data[property_name], dtype=float)
 
         # Prepare step plot data: piecewise-constant
         # Use stairs/step plotting: create repeated arrays for step plotting
         # Approach: r_steps of length 2N, v_steps length 2N with v_j repeated
-        N = f_j.size
+        N = self.mesh.n_cells
         r_steps = np.empty(2 * N)
         v_steps = np.empty(2 * N)
         r_steps[0::2] = radii[:-1]
@@ -879,15 +902,20 @@ class PlanetMesh:
 
         centers = 0.5 * (radii[:-1] + radii[1:])
 
-        import matplotlib.pyplot as plt
-
         fig, ax = plt.subplots(1, 1, figsize=figsize)
-        # Step plot: use drawstyle='steps-post' or stairs if available
-        # Using stairs (clear intent) if matplotlib >= 3.4; otherwise fallback to step
+        # Step plot: use drawstyle='steps-post' or stairs if available Using
+        # stairs (clear intent) if matplotlib >= 3.4; otherwise fallback to
+        # step
         try:
-            ax.stairs(f_j, radii, baseline=None, label="shell property (piecewise-constant)")
+            ax.stairs(
+                f_j, radii, baseline=None,
+                label=property_name
+            )
         except Exception:
-            ax.plot(r_steps, v_steps, drawstyle="steps-post", label="shell property (piecewise-constant)")
+            ax.plot(
+                r_steps, v_steps, drawstyle="steps-post",
+                label=property_name
+            )
 
         # Vertical lines for shell edges
         for r in radii:
@@ -896,14 +924,18 @@ class PlanetMesh:
         # Optional shading of shells for visibility
         if show_shading:
             cmap = plt.get_cmap("Blues")
-            # Normalize to property range for shading intensity (avoid division by zero)
+            # Normalize to property range for shading intensity (avoid division
+            # by zero)
             vmin, vmax = np.min(f_j), np.max(f_j)
             rng = vmax - vmin if vmax != vmin else 1.0
             for i in range(N):
                 r0, r1 = radii[i], radii[i+1]
                 # shade using normalized value -> subtle color
                 norm_val = (f_j[i] - vmin) / rng
-                ax.axvspan(r0, r1, facecolor=cmap(0.2 + 0.6 * norm_val), alpha=0.08, zorder=0)
+                ax.axvspan(
+                    r0, r1, facecolor=cmap(0.2 + 0.6 * norm_val),
+                    alpha=0.08, zorder=0
+                )
 
         # Centers markers
         if show_centers:
@@ -911,12 +943,22 @@ class PlanetMesh:
 
         # Annotate radii if requested
         if annotate_radii:
+            ylim = ax.get_ylim()
+            y_offset = ylim[0] - 0.05 * (ylim[1] - ylim[0])
             for r in radii:
-                ax.text(r, ax.get_ylim()[0] - 0.05*(ax.get_ylim()[1]-ax.get_ylim()[0]),
-                        f"{r:.3g}", rotation=90, va="top", ha="center", fontsize=8)
+                ax.text(
+                    r, y_offset, f"{r:.3g}",
+                    rotation=90,
+                    va="top",
+                    ha="center",
+                    fontsize=8,
+                )
 
-        ax.set_xlabel("radius (r)")
-        ax.set_ylabel("property value")
+        # Set labels and title
+        ax.set_xlabel("Radius (km)")
+        ax.set_ylabel(property_name)
+        if title is None:
+            title = f"{property_name} on 1D spherical mesh"
         ax.set_title(title)
         ax.legend(loc="best")
         ax.grid(True, linestyle=":", alpha=0.6)
