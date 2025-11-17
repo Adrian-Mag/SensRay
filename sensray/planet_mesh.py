@@ -1378,6 +1378,101 @@ class PlanetMesh:
                 out.append(a * (1.0 - t) + b * t)
         return np.asarray(out, float)
 
+    def project_point_onto_mesh(
+        self,
+        point: np.ndarray,
+        max_distance_km: float = 500.0,
+        inward_offset_km: float = 0.1,
+    ) -> Optional[np.ndarray]:
+        """
+        Project a point onto the mesh surface if it's outside but within
+        planet radius.
+
+        This method is useful for handling surface points that are
+        geometrically outside the tetrahedral mesh due to the faceted
+        approximation of the spherical surface.
+
+        Parameters
+        ----------
+        point : np.ndarray
+            3D point coordinates (x, y, z) in km
+        max_distance_km : float, optional
+            Maximum distance from mesh surface to attempt projection
+            (default: 500 km)
+        inward_offset_km : float, optional
+            Small offset to move projected point inside mesh
+            (default: 0.1 km)
+
+        Returns
+        -------
+        np.ndarray or None
+            Projected point coordinates, or None if projection failed
+
+        Examples
+        --------
+        >>> surface_point = np.array([1737.4, 0, 0])  # At Moon surface
+        >>> projected = mesh.project_point_onto_mesh(surface_point)
+        >>> if projected is not None:
+        ...     print(f"Projected point is now inside mesh")
+
+        Notes
+        -----
+        - Only projects points within planet radius but outside mesh
+        - Uses VTK's FindClosestPoint for exact surface projection
+        - Projects point slightly inward to ensure it's inside a cell
+        """
+        if self.mesh is None:
+            raise RuntimeError(
+                "No mesh generated. Call generate_*_mesh() first."
+            )
+
+        from pyvista import _vtk as vtk  # type: ignore
+
+        r = np.linalg.norm(point)
+
+        # Only project if point is within planet radius
+        if r > self.planet_model.radius:
+            return None
+
+        # Use VTK to find exact projection onto mesh surface
+        cell_locator = vtk.vtkCellLocator()
+        cell_locator.SetDataSet(self.mesh)
+        cell_locator.BuildLocator()
+
+        closest_point = np.zeros(3)
+        cell_id = vtk.mutable(0)
+        sub_id = vtk.mutable(0)
+        dist2 = vtk.mutable(0.0)
+
+        cell_locator.FindClosestPoint(
+            point, closest_point, cell_id, sub_id, dist2
+        )
+
+        dist = np.sqrt(float(dist2))
+
+        # Only proceed if within reasonable distance
+        if dist >= max_distance_km:
+            warnings.warn(
+                f"Point at radius {r:.2f} km is {dist:.2f} km from mesh "
+                f"surface (exceeds max_distance_km={max_distance_km:.2f}). "
+                "Projection failed.",
+                UserWarning,
+            )
+            return None
+
+        # Project point slightly inside from the surface
+        if dist > 1e-10:
+            # Direction: from point toward closest surface point
+            direction = closest_point - point
+            direction = direction / np.linalg.norm(direction)
+            # Move to surface + small inward offset
+            projected = closest_point + direction * inward_offset_km
+        else:
+            # Point is already very close, nudge inward radially
+            projected = closest_point - point / (r + 1e-10) * inward_offset_km
+
+        return projected
+
     def _compute_ray_cell_lengths_midpoint(self,
                                            ray_xyz: np.ndarray,
                                            step_km: float = 8.0,
@@ -1421,6 +1516,24 @@ class PlanetMesh:
                 cid = loc.FindCell(point + eps * v)
                 if cid is None or cid < 0:
                     cid = loc.FindCell(point - eps * v)
+
+                # If still not found, try projecting onto mesh surface
+                if cid is None or cid < 0:
+                    projected = self.project_point_onto_mesh(point)
+                    if projected is not None:
+                        cid = loc.FindCell(projected)
+
+                    # If still not found, warn about the issue
+                    if cid is None or cid < 0:
+                        r = np.linalg.norm(point)
+                        if r <= self.planet_model.radius:
+                            warnings.warn(
+                                f"Ray point at radius {r:.2f} km "
+                                f"(within planet radius "
+                                f"{self.planet_model.radius:.2f} km) could "
+                                "not be located in mesh. Segment ignored.",
+                                UserWarning,
+                            )
             return int(cid) if cid is not None and cid >= 0 else -1
 
         out = np.zeros(self.mesh.n_cells, float)

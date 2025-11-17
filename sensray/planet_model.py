@@ -569,7 +569,8 @@ class PlanetModel:
 
         return layer_info
 
-    def get_discontinuities(self, as_depths: bool = False) -> List[float]:
+    def get_discontinuities(self, as_depths: bool = False,
+                            include_radius: bool = True) -> List[float]:
         """
         Get discontinuity locations.
 
@@ -594,12 +595,14 @@ class PlanetModel:
 
             # Remove center and surface
             boundaries.discard(0.0)
-            boundaries.discard(self.radius)
+            if not include_radius:
+                boundaries.discard(self.radius)
 
             return sorted(boundaries)
         else:
             # Return as depths
-            radii = self.get_discontinuities(as_depths=False)
+            radii = self.get_discontinuities(as_depths=False,
+                                             include_radius=include_radius)
             return sorted([self.radius - r for r in radii])
 
     # ========== Visualization ========== #
