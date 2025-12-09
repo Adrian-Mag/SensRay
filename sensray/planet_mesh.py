@@ -813,6 +813,8 @@ class PlanetMesh:
                             show_centers=False,
                             annotate_radii=False,
                             figsize=(8, 4),
+                            ax=None,
+                            show_plot=True,
                             title=None):
         """
         Plot a property defined per-shell on a 1D spherical radial
@@ -830,6 +832,10 @@ class PlanetMesh:
             Annotate radii values on the plot (may clutter if many shells)
         figsize : tuple, default=(8, 4)
             Figure size (width, height) in inches
+        ax : matplotlib Axes, optional
+            If provided, plot on this Axes. Otherwise, create a new Figure.
+        show_plot : bool, default=True
+            If True, display the plot immediately
         title : str, optional
             Plot title. If None, uses f"{property_name} on 1D spherical mesh"
 
@@ -871,7 +877,10 @@ class PlanetMesh:
 
         centers = 0.5 * (radii[:-1] + radii[1:])
 
-        fig, ax = plt.subplots(1, 1, figsize=figsize)
+        if ax is None:
+            fig, ax = plt.subplots(1, 1, figsize=figsize)
+        else:
+            fig = ax.figure
         # Step plot: use drawstyle='steps-post' or stairs if available Using
         # stairs (clear intent) if matplotlib >= 3.4; otherwise fallback to
         # step
@@ -933,7 +942,8 @@ class PlanetMesh:
         ax.grid(True, linestyle=":", alpha=0.6)
         plt.tight_layout()
 
-        plt.show()
+        if show_plot:
+            plt.show()
         return fig, ax
 
     def list_properties(self,
@@ -1815,7 +1825,7 @@ class PlanetMesh:
 
                 from .coordinates import CoordinateConverter
                 xyz = CoordinateConverter.earth_to_cartesian(
-                    lat_deg, lon_deg, depth_km,
+                    (lat_deg, lon_deg, depth_km),
                     earth_radius=self.planet_model.radius
                 )
                 points.append(xyz)
