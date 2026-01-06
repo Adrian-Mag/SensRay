@@ -1926,8 +1926,39 @@ class PlanetMesh:
         else:
             warnings.warn(f"Metadata file not found: {metadata_path}")
 
-        # Determine mesh type
-        mesh_type = metadata.get('mesh_type', 'tetrahedral')
+        # Determine mesh type.
+        # If metadata contains an explicit mesh_type, validate it.
+        # Otherwise auto-detect from existing files (.npz => spherical, .vtu => tetrahedral).
+        # If both file types exist, require explicit disambiguation via metadata.
+        npz_path = f"{base_path}.npz"
+        vtu_path = f"{base_path}.vtu"
+
+        if 'mesh_type' in metadata:
+            mesh_type = metadata['mesh_type']
+            if mesh_type not in ('spherical', 'tetrahedral'):
+                raise ValueError(
+                    f"Unsupported mesh_type in metadata: {mesh_type}. "
+                    "Supported values: 'spherical', 'tetrahedral'"
+                )
+        else:
+            has_npz = os.path.exists(npz_path)
+            has_vtu = os.path.exists(vtu_path)
+            if has_npz and not has_vtu:
+                mesh_type = 'spherical'
+            elif has_vtu and not has_npz:
+                mesh_type = 'tetrahedral'
+            elif has_npz and has_vtu:
+                raise FileExistsError(
+                    f"Both mesh files found for base '{base_path}': "
+                    f"{npz_path} (spherical) and {vtu_path} (tetrahedral). "
+                    "Please set 'mesh_type' in the metadata or remove one of the files."
+                )
+            else:
+                raise FileNotFoundError(
+                    f"No mesh files found for base '{base_path}': "
+                    f"expected {npz_path} (spherical) or {vtu_path} (tetrahedral). "
+                    "Metadata missing 'mesh_type'."
+                )
 
         # Create or validate planet model
         if planet_model is None:
