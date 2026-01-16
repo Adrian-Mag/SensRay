@@ -1937,7 +1937,7 @@ class PlanetMesh:
             warnings.warn(f"Metadata file not found: {metadata_path}")
 
         # Determine mesh type
-        mesh_type = metadata.get('mesh_type', 'tetrahedral')
+        mesh_type = metadata.get('mesh_type', 'spherical')
 
         # Create or validate planet model
         if planet_model is None:
