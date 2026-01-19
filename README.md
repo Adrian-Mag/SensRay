@@ -28,6 +28,21 @@ Optional extras for demos and development:
 pip install -e "[dev,notebooks]"
 ```
 
+Optional runtime behavior for tetrahedral quadrature
+---------------------------------------------------
+
+By default SensRay uses the built-in tetrahedral quadrature implementation in `sensray/quadrature.py` (orders 1–3) to avoid depending on newer `quadpy` releases that changed licensing. If you prefer to use `quadpy` instead, install the optional dependency and enable it at runtime:
+
+```bash
+# install the optional quadpy extra
+pip install .[quadpy]
+
+# enable quadpy at runtime (environment variable)
+export SENSRAY_USE_QUADPY=1
+```
+
+When `SENSRAY_USE_QUADPY=1` is set and `quadpy` is available, SensRay will use `quadpy.t3.get_good_scheme(order)` for tetrahedral integration. Otherwise the package falls back to the bundled in-house implementation that matches `quadpy` numerically for orders 1–3 (see `tests/test_quadpy_comparison.py`).
+
 Dependencies you will likely need for full functionality:
 
 - obsPy (TauP) — ray calculation
