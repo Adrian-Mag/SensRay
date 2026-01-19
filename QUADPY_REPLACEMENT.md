@@ -19,13 +19,23 @@ The implementation provides Gauss quadrature rules for tetrahedral integration u
 
 ## API Compatibility
 
-The implementation provides a drop-in replacement for `quadpy.t3.get_good_scheme()`:
+The implementation provides a drop-in replacement for `quadpy.t3.get_good_scheme()` with optional quadpy support:
 
 ```python
 from sensray import quadrature
 
-# Get a quadrature scheme (order 3 for cubic accuracy)
+# Use in-house implementation (default, no dependencies)
 scheme = quadrature.t3.get_good_scheme(3)
+
+# Or explicitly specify
+scheme = quadrature.get_good_scheme(3, use_quadpy=False)
+
+# Use quadpy if installed (for higher orders or compatibility)
+scheme = quadrature.get_good_scheme(5, use_quadpy=True)
+
+# Set default via environment variable
+# export SENSRAY_USE_QUADPY=true
+scheme = quadrature.get_good_scheme(5)  # Will use quadpy if available
 
 # Integrate a function over a tetrahedron
 # vertices: shape (4, 3) or (3, 4)
@@ -70,7 +80,7 @@ EOF
 
 ## Migration from quadpy
 
-No changes are required in user code. The replacement is transparent:
+The in-house implementation is now the default. No changes are required for existing code:
 
 **Before:**
 ```python
@@ -78,10 +88,16 @@ import quadpy
 scheme = quadpy.t3.get_good_scheme(5)
 ```
 
-**After:**
+**After (automatic, uses in-house by default):**
 ```python
 from sensray import quadrature
-scheme = quadrature.t3.get_good_scheme(3)
+scheme = quadrature.t3.get_good_scheme(3)  # In-house, order 3
+```
+
+**Optional: Keep using quadpy if installed:**
+```python
+from sensray import quadrature
+scheme = quadrature.get_good_scheme(5, use_quadpy=True)
 ```
 
 The integration in [sensray/planet_mesh.py](sensray/planet_mesh.py) has been updated to use `quadrature.t3.get_good_scheme(3)` instead of `quadpy.t3.get_good_scheme(5)`.

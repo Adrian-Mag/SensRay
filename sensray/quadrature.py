@@ -2,9 +2,8 @@
 Numerical quadrature for tetrahedral integration.
 
 This module provides quadrature rules for integrating functions over
-tetrahedral domains. It replaces the functionality previously provided
-by quadpy with in-house implementations using well-established Gauss
-quadrature rules.
+tetrahedral domains. It includes in-house implementations using well-established 
+Gauss quadrature rules, with optional fallback to quadpy if available.
 
 References
 ----------
@@ -12,11 +11,23 @@ References
   Computer Methods in Applied Mechanics and Engineering, 55(3), 339-348.
 - Shunn, L., & Ham, F. (2012). "Symmetric quadrature rules for tetrahedra
   based on a cubic close-packed lattice arrangement."
-  Journal of Computational and Applied Mathematics, 236(17), 4348-4364.
+  Journal of Computational and Applied Mathematics, 236(17), 4348-4564.
 """
 
 import numpy as np
 from typing import Callable, Union
+import os
+
+# Try to import quadpy (optional)
+_QUADPY_AVAILABLE = False
+try:
+    import quadpy
+    _QUADPY_AVAILABLE = True
+except ImportError:
+    quadpy = None
+
+# Default to in-house implementation
+_USE_QUADPY = os.environ.get('SENSRAY_USE_QUADPY', 'false').lower() == 'true'
 
 
 class TetrahedralQuadrature:
@@ -90,7 +101,7 @@ class TetrahedralQuadrature:
                 [1/6, 1/6, 1/6, 0.5]
             ])
             weights = np.array([-0.8, 0.45, 0.45, 0.45, 0.45])
-            
+
         else:
             raise ValueError(f"Order {order} not supported. Use 1, 2, or 3.")
 
@@ -146,14 +157,8 @@ class TetrahedralQuadrature:
 
         # Transform barycentric coordinates to Cartesian
         # x = λ0*v0 + λ1*v1 + λ2*v2 + λ3*v3
-        quad_points_cartesian = np.zeros((len(self.points), 3))
-        for i, bary in enumerate(self.points):
-            quad_points_cartesian[i] = (
-                bary[0] * v0 +
-                bary[1] * v1 +
-                bary[2] * v2 +
-                bary[3] * v3
-            )
+        # Vectorized: quad_points_cartesian = self.points @ vertices
+        quad_points_cartesian = self.points.dot(vertices)
 
         # Evaluate function at quadrature points
         func_values = func(quad_points_cartesian)
@@ -172,7 +177,7 @@ class TetrahedralQuadrature:
         return float(integral)
 
 
-def get_good_scheme(order: int) -> TetrahedralQuadrature:
+def get_good_scheme(order: int, use_quadpy: bool = None) -> TetrahedralQuadrature:
     """
     Get a good quadrature scheme for tetrahedra.
 
@@ -181,20 +186,52 @@ def get_good_scheme(order: int) -> TetrahedralQuadrature:
     Parameters
     ----------
     order : int
-        Desired order of accuracy (1-5)
+        Desired order of accuracy (1-3 for in-house, 1-10+ for quadpy)
+    use_quadpy : bool, optional
+        If True, use quadpy if available. If False, use in-house implementation.
+        If None (default), uses environment variable SENSRAY_USE_QUADPY or 
+        defaults to in-house implementation.
+        Note: quadpy uses different vertex ordering - see quadpy documentation.
 
     Returns
     -------
-    TetrahedralQuadrature
+    TetrahedralQuadrature or quadpy scheme
         Quadrature scheme object with integrate() method
+
+    Raises
+    ------
+    ImportError
+        If use_quadpy=True but quadpy is not installed
+    ValueError
+        If order not supported by the chosen implementation
 
     Examples
     --------
-    >>> scheme = get_good_scheme(5)
+    >>> # Use in-house implementation (default)
+    >>> scheme = get_good_scheme(3)
     >>> vertices = np.array([[0,0,0], [1,0,0], [0,1,0], [0,0,1]])
     >>> result = scheme.integrate(lambda x: np.ones(len(x)), vertices.T)
+    
+    >>> # Explicitly use quadpy if available
+    >>> scheme = get_good_scheme(5, use_quadpy=True)
+    
+    Notes
+    -----
+    Set environment variable SENSRAY_USE_QUADPY=true to default to quadpy.
     """
-    return TetrahedralQuadrature(order=order)
+    # Determine which implementation to use
+    if use_quadpy is None:
+        use_quadpy = _USE_QUADPY and _QUADPY_AVAILABLE
+    
+    if use_quadpy:
+        if not _QUADPY_AVAILABLE:
+            raise ImportError(
+                "quadpy is not installed. Install with 'pip install quadpy' "
+                "or use the in-house implementation (use_quadpy=False)."
+            )
+        return quadpy.t3.get_good_scheme(order)
+    else:
+        return TetrahedralQuadrature(order=order)
 
 
 # Create a namespace that mimics quadpy.t3 for drop-in compatibility
