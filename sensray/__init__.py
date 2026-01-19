@@ -14,7 +14,7 @@ __version__ = "0.3.0"
 __author__ = "PhD Project"
 
 # Public API: import only stable, present modules
-from .model import PlanetModel
+from .planet_model import PlanetModel
 from .planet_mesh import PlanetMesh
 from .coordinates import CoordinateConverter
 

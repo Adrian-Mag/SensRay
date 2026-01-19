@@ -32,12 +32,17 @@ setup(
         "Topic :: Scientific/Engineering :: Visualization",
         "Topic :: Scientific/Engineering :: Information Analysis",
     ],
-    python_requires=">=3.8",
+    python_requires=">=3.11",
     install_requires=[
         "numpy>=1.20.0",
         "matplotlib>=3.3.0",
         "scipy>=1.7.0",
         "obspy>=1.3.0",
+        "geographiclib>=2.1",
+        "trame>=3.11",
+        "trame-vtk>=2.10",
+        "trame-vuetify>=3.1",
+        "vtk>=9.0.1",
     ],
     extras_require={
         "dev": [
