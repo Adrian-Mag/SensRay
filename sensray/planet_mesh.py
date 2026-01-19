@@ -2141,4 +2141,3 @@ class SphericalPlanetMesh():
                 mesh._point_data[prop_name] = data[key]
 
         return mesh
-

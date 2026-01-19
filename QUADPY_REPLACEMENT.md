@@ -15,9 +15,7 @@ The implementation provides Gauss quadrature rules for tetrahedral integration u
 
 - **Order 1**: 1-point centroid rule (exact for constants)
 - **Order 2**: 4-point rule (exact for quadratics)
-- **Order 3**: 5-point rule (exact for cubics) - **Currently used in SensRay**
-- **Order 4**: 11-point Keast rule (exact for 4th-order polynomials)
-- **Order 5**: 15-point Keast rule (5th-order accuracy)
+- **Order 3**: 5-point rule (exact for cubics) - **Used in SensRay**
 
 ## API Compatibility
 
@@ -36,7 +34,7 @@ result = scheme.integrate(function, vertices)
 
 ## References
 
-- Keast, P. (1986). "Moderate-degree tetrahedral quadrature formulas." 
+- Keast, P. (1986). "Moderate-degree tetrahedral quadrature formulas."
   *Computer Methods in Applied Mechanics and Engineering*, 55(3), 339-348.
 
 ## Testing
@@ -64,7 +62,7 @@ scheme = quadrature.get_good_scheme(3)
 result = scheme.integrate(lambda x: np.ones(len(x)), vertices.T)
 print(f"Volume: {result:.12f} (expected: 0.166666666667)")
 
-# Quadratic test 
+# Quadratic test
 result = scheme.integrate(lambda pts: pts[:, 0]**2 + pts[:, 1]**2, vertices.T)
 print(f"x^2+y^2: {result:.12f} (expected: 0.033333333333)")
 EOF
