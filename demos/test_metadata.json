@@ -9,15 +9,8 @@
     "layer_0-layer_1-layer_2-gmsh:bounding_entities",
     "region",
     "vp",
-    "vs",
-    "rho",
-    "ray_P_wave_P_lengths",
-    "K_P_vp",
-    "ray_S_wave_S_lengths",
-    "K_S_vs",
-    "ray_ScS_wave_ScS_lengths",
-    "K_ScS_vs"
+    "vs"
   ],
-  "n_cells": 18342,
-  "n_points": 3989
+  "n_cells": 38028,
+  "n_points": 7664
 }
