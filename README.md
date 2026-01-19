@@ -41,7 +41,7 @@ pip install .[quadpy]
 export SENSRAY_USE_QUADPY=1
 ```
 
-When `SENSRAY_USE_QUADPY=1` is set and `quadpy` is available, SensRay will use `quadpy.t3.get_good_scheme(order)` for tetrahedral integration. Otherwise the package falls back to the bundled in-house implementation that matches `quadpy` numerically for orders 1–3 (see `tests/test_quadpy_comparison.py`).
+When `SENSRAY_USE_QUADPY=1` is set and `quadpy` is available, SensRay will use `quadpy.t3.get_good_scheme(order)` for tetrahedral integration. Otherwise the package falls back to the bundled in-house implementation that matches `quadpy` numerically for orders 1–3.
 
 Dependencies you will likely need for full functionality:
 

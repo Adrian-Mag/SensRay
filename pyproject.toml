@@ -4,14 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sensray"
-version = "0.3.0"
+version = "0.4.0"
 description = "Seismic ray tracing, travel times, and 3D visualization"
 readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "MIT"}
 keywords = ["seismology", "ray-tracing", "travel-times", "earth-models"]
 authors = [
-    {name = "PhD Student"}
+    {name = Adrian Mag and Matthew Bell}
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -24,9 +24,8 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Scientific/Engineering :: Seismic Snesitvity kernels",
     "Topic :: Scientific/Engineering :: Visualization",
-    "Topic :: Scientific/Engineering :: Information Analysis",
 ]
 
 dependencies = [
@@ -79,22 +78,12 @@ all = [
     "quadpy>=0.16.0",
 ]
 
-[project.urls]
-"Bug Reports" = "https://github.com/username/sensray/issues"
-"Source" = "https://github.com/username/sensray"
-"Documentation" = "https://github.com/username/sensray/tree/main/demos"
-
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["sensray*"]
 
 [tool.setuptools.package-data]
 sensray = ["models/*.nd"]
-
-[tool.pytest.ini_options]
-minversion = "6.0"
-testpaths = ["tests"]
-python_files = ["test_*.py"]
 
 [tool.black]
 line-length = 88
