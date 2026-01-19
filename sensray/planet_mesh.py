@@ -9,7 +9,7 @@ refinement and unified visualization methods.
 from __future__ import annotations
 
 from typing import Optional, Dict, List, Any, TYPE_CHECKING, Callable
-import quadpy
+from . import quadrature
 if TYPE_CHECKING:
     from .planet_model import PlanetModel
 import numpy as np
@@ -1134,7 +1134,8 @@ class PlanetMesh:
         tetra_points = points[tetra_indices]  # shape (N_tets, 4, 3)
 
         n_tets = tetra_points.shape[0]
-        scheme: Any = quadpy.t3.get_good_scheme(5)
+        # Use order 3 quadrature (exact for cubic polynomials)
+        scheme: Any = quadrature.t3.get_good_scheme(3)
 
         # QuadPy expects shape (4, n_tets, 3)
         tetra_qp = np.transpose(tetra_points, (1, 0, 2))  # (4, n_tets, 3)
@@ -2150,4 +2151,3 @@ class SphericalPlanetMesh():
                 mesh._point_data[prop_name] = data[key]
 
         return mesh
-
