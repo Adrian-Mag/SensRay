@@ -316,7 +316,7 @@ class PlanetModel:
         if property_name not in ['vp', 'vs', 'rho']:
             raise ValueError(f"Unknown property: {property_name}")
 
-        # Build sorted depth/value arrays once
+        # Build sorted depth/value arrays once; use stable sort to keep duplicates in file order
         all_depths = []
         all_values = []
         for layer in self.layers:
@@ -324,7 +324,7 @@ class PlanetModel:
                 all_depths.append(point['depth'])
                 all_values.append(point[property_name])
 
-        sort_idx = np.argsort(all_depths)
+        sort_idx = np.argsort(all_depths, kind="stable")
         sorted_depths = np.array(all_depths)[sort_idx]
         sorted_values = np.array(all_values)[sort_idx]
 
@@ -440,8 +440,8 @@ class PlanetModel:
                 all_values.append(point[name])
                 all_depths.append(point['depth'])
 
-        # Sort by depth (NOT radius) to preserve discontinuity ordering
-        sort_idx = np.argsort(all_depths)
+        # Sort by depth (NOT radius) to preserve discontinuity ordering; stable keeps duplicate depths in file order
+        sort_idx = np.argsort(all_depths, kind="stable")
 
         return {
             'radius': np.array(all_radii)[sort_idx],
