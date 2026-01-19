@@ -2,7 +2,7 @@
 Numerical quadrature for tetrahedral integration.
 
 This module provides quadrature rules for integrating functions over
-tetrahedral domains. It includes in-house implementations using well-established 
+tetrahedral domains. It includes in-house implementations using well-established
 Gauss quadrature rules, with optional fallback to quadpy if available.
 
 References
@@ -177,7 +177,7 @@ class TetrahedralQuadrature:
         return float(integral)
 
 
-def get_good_scheme(order: int, use_quadpy: bool = None) -> TetrahedralQuadrature:
+def get_good_scheme(order: int, use_quadpy: bool = True) -> TetrahedralQuadrature:
     """
     Get a good quadrature scheme for tetrahedra.
 
@@ -189,7 +189,7 @@ def get_good_scheme(order: int, use_quadpy: bool = None) -> TetrahedralQuadratur
         Desired order of accuracy (1-3 for in-house, 1-10+ for quadpy)
     use_quadpy : bool, optional
         If True, use quadpy if available. If False, use in-house implementation.
-        If None (default), uses environment variable SENSRAY_USE_QUADPY or 
+        If None (default), uses environment variable SENSRAY_USE_QUADPY or
         defaults to in-house implementation.
         Note: quadpy uses different vertex ordering - see quadpy documentation.
 
@@ -211,10 +211,10 @@ def get_good_scheme(order: int, use_quadpy: bool = None) -> TetrahedralQuadratur
     >>> scheme = get_good_scheme(3)
     >>> vertices = np.array([[0,0,0], [1,0,0], [0,1,0], [0,0,1]])
     >>> result = scheme.integrate(lambda x: np.ones(len(x)), vertices.T)
-    
+
     >>> # Explicitly use quadpy if available
     >>> scheme = get_good_scheme(5, use_quadpy=True)
-    
+
     Notes
     -----
     Set environment variable SENSRAY_USE_QUADPY=true to default to quadpy.
@@ -222,7 +222,7 @@ def get_good_scheme(order: int, use_quadpy: bool = None) -> TetrahedralQuadratur
     # Determine which implementation to use
     if use_quadpy is None:
         use_quadpy = _USE_QUADPY and _QUADPY_AVAILABLE
-    
+
     if use_quadpy:
         if not _QUADPY_AVAILABLE:
             raise ImportError(
