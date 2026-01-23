@@ -153,12 +153,12 @@ class PlanetModel:
     def _parse_nd_file(self) -> None:
         """Parse the .nd file and extract model structure."""
         self.layers = []
-        self.discontinuities = []
         self.radius = 0.0
         self._parsed_name = None
 
         layer_points = []
-        layer_count = 0
+        current_layer_name = None
+        first_layer = True
 
         with open(self.nd_file_path, 'r') as f:
             for line_num, line in enumerate(f, 1):
@@ -181,22 +181,22 @@ class PlanetModel:
                 if self._is_discontinuity_label(line):
                     # End current layer if we have points
                     if layer_points:
-                        # Create layer with previous points
-                        if layer_count == 0:
+                        # Use the previous discontinuity label as the layer name, or 'surface' for the first layer
+                        if first_layer:
                             layer_name = 'surface'
+                            first_layer = False
                         else:
-                            layer_name = f'layer_{layer_count}'
+                            layer_name = current_layer_name if current_layer_name is not None else 'unnamed_layer'
 
                         self.layers.append({
                             'name': layer_name,
                             'points': layer_points.copy()
                         })
                         layer_points = []
-                        layer_count += 1
 
                     # Store discontinuity name for next layer
                     disc_name = line.split('#')[0].strip()
-                    self.discontinuities.append(disc_name)
+                    current_layer_name = disc_name
                     continue
 
                 # Parse data line: depth vp vs rho
@@ -232,17 +232,10 @@ class PlanetModel:
 
         # Add final layer if we have remaining points
         if layer_points:
-            if layer_count == 0:
+            if first_layer:
                 layer_name = 'surface'
-            elif (self.discontinuities and
-                  layer_count <= len(self.discontinuities)):
-                # Use the last discontinuity name for the final layer
-                if self.discontinuities:
-                    layer_name = self.discontinuities[-1]
-                else:
-                    layer_name = f'layer_{layer_count}'
             else:
-                layer_name = f'layer_{layer_count}'
+                layer_name = current_layer_name if current_layer_name is not None else 'unnamed_layer'
 
             self.layers.append({
                 'name': layer_name,
@@ -466,8 +459,8 @@ class PlanetModel:
             'properties': properties,
             'n_properties': len(properties),
             'n_layers': len(self.layers),
-            'n_discontinuities': len(self.discontinuities),
-            'discontinuities': self.discontinuities.copy()
+            'n_discontinuities': len(self.layers) - 1,  # discontinuities between layers so not include surface
+            'discontinuities': [l["name"] for l in self.layers[1::]]  # exclude surface
         }
 
         # Add layer information
@@ -570,40 +563,57 @@ class PlanetModel:
         return layer_info
 
     def get_discontinuities(self, as_depths: bool = False,
-                            include_radius: bool = True) -> List[float]:
+                            include_radius: bool = True, outwards: bool = True) -> List[float]:
         """
-        Get discontinuity locations.
+        Get discontinuity locations from the surface inward.
 
         Parameters
         ----------
         as_depths : bool
             If True, return as depths from surface.
             If False, return as radii from center.
+        include_radius : bool
+            If False, exclude the outer radius from the list.
+        outwards : bool
+            If True, return discontinuities from center outwards.
 
         Returns
         -------
         List[float]
             Discontinuity locations
         """
-        if not as_depths:
-            # Return as radii - need to extract from layer boundaries
-            boundaries = set()
-            for layer in self.layers:
-                radii = [p['radius'] for p in layer['points']]
-                boundaries.add(min(radii))
-                boundaries.add(max(radii))
+        discontinuities = []
+        for layer in self.layers:
+            # discontinuity at top of layer
+            discontinuities.append(layer['points'][0]['depth' if as_depths else 'radius'])
+        if not include_radius:
+            # remove outer - the first layer
+            discontinuities = discontinuities[1::]
+        if outwards:
+            # reverse to get from core outwards
+            discontinuities = discontinuities[::-1]
 
-            # Remove center and surface
-            boundaries.discard(0.0)
-            if not include_radius:
-                boundaries.discard(self.radius)
+        return discontinuities
 
-            return sorted(boundaries)
-        else:
-            # Return as depths
-            radii = self.get_discontinuities(as_depths=False,
-                                             include_radius=include_radius)
-            return sorted([self.radius - r for r in radii])
+        # if not as_depths:
+        #     # Return as radii - need to extract from layer boundaries
+        #     boundaries = set()
+        #     for layer in self.layers:
+        #         radii = [p['radius'] for p in layer['points']]
+        #         boundaries.add(min(radii))
+        #         boundaries.add(max(radii))
+
+        #     # Remove center and surface
+        #     boundaries.discard(0.0)
+        #     if not include_radius:
+        #         boundaries.discard(self.radius)
+
+        #     return sorted(boundaries)
+        # else:
+        #     # Return as depths
+        #     radii = self.get_discontinuities(as_depths=False,
+        #                                      include_radius=include_radius)
+        #     return sorted([self.radius - r for r in radii])
 
     # ========== Visualization ========== #
 

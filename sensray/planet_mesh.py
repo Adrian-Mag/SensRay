@@ -37,7 +37,7 @@ class PlanetMesh:
     planet_model : PlanetModel
         The planet model to create a mesh for
     mesh_type : str
-        Type of mesh to generate: "tetrahedral"
+        Type of mesh to generate: "spherical" or "tetrahedral"
 
     Examples
     --------
@@ -48,7 +48,7 @@ class PlanetMesh:
     >>> mesh.plot_cross_section(property_name="vp")
     """
 
-    def __init__(self, planet_model, mesh_type: str = "tetrahedral"):
+    def __init__(self, planet_model, mesh_type: str = "spherical"):
         if mesh_type == "tetrahedral":
             if pv is None:  # pragma: no cover
                 raise ImportError(
