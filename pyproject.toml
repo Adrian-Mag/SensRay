@@ -11,7 +11,7 @@ requires-python = ">=3.8"
 license = {text = "MIT"}
 keywords = ["seismology", "ray-tracing", "travel-times", "earth-models"]
 authors = [
-    {name = Adrian Mag and Matthew Bell}
+    {name = "Adrian Mag and Matthew Bell"}
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
