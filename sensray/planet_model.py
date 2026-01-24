@@ -16,7 +16,6 @@ from obspy.taup import TauPyModel
 from obspy.taup.taup_create import build_taup_model
 import warnings
 
-
 class PlanetModel:
     """
     A read-only planet model loaded directly from TauP .nd files.
@@ -152,7 +151,7 @@ class PlanetModel:
 
     def _parse_nd_file(self) -> None:
         """Parse the .nd file and extract model structure."""
-        self.layers = []
+        self.layers = {}
         self.radius = 0.0
         self._parsed_name = None
 
@@ -188,10 +187,11 @@ class PlanetModel:
                         else:
                             layer_name = current_layer_name if current_layer_name is not None else 'unnamed_layer'
 
-                        self.layers.append({
-                            'name': layer_name,
-                            'points': layer_points.copy()
-                        })
+                        self.layers[layer_name] = layer_points.copy()
+                        # self.layers.append({
+                        #     'name': layer_name,
+                        #     'points': layer_points.copy()
+                        # })
                         layer_points = []
 
                     # Store discontinuity name for next layer
@@ -237,23 +237,28 @@ class PlanetModel:
             else:
                 layer_name = current_layer_name if current_layer_name is not None else 'unnamed_layer'
 
-            self.layers.append({
-                'name': layer_name,
-                'points': layer_points
-            })
+            self.layers[layer_name] = layer_points.copy()
+            # self.layers.append({
+            #     'name': layer_name,
+            #     'points': layer_points
+            # })
 
         # If no layers were created but we have discontinuities,
         # something went wrong
         if not self.layers and layer_points:
-            self.layers.append({
-                'name': 'default',
-                'points': layer_points
-            })
+            self.layers["default"] = layer_points.copy()
+            # self.layers.append({
+            #     'name': 'default',
+            #     'points': layer_points
+            # })
 
         # Convert depths to radii for internal consistency
-        for layer in self.layers:
-            for point in layer['points']:
+        for points in self.layers.values():
+            for point in points:
                 point['radius'] = self.radius - point['depth']
+        # for layer in self.layers:
+        #     for point in layer['points']:
+        #         point['radius'] = self.radius - point['depth']
 
         # Validate model
         if self.radius <= 0:
@@ -312,10 +317,14 @@ class PlanetModel:
         # Build sorted depth/value arrays once; use stable sort to keep duplicates in file order
         all_depths = []
         all_values = []
-        for layer in self.layers:
-            for point in layer['points']:
+        for points in self.layers.values():
+            for point in points:
                 all_depths.append(point['depth'])
                 all_values.append(point[property_name])
+        # for layer in self.layers.values():
+        #     for point in layer['points']:
+        #         all_depths.append(point['depth'])
+        #         all_values.append(point[property_name])
 
         sort_idx = np.argsort(all_depths, kind="stable")
         sorted_depths = np.array(all_depths)[sort_idx]
@@ -427,8 +436,8 @@ class PlanetModel:
         all_values = []
         all_depths = []
 
-        for layer in self.layers:
-            for point in layer['points']:
+        for points in self.layers.values():
+            for point in points:
                 all_radii.append(point['radius'])
                 all_values.append(point[name])
                 all_depths.append(point['depth'])
@@ -460,18 +469,18 @@ class PlanetModel:
             'n_properties': len(properties),
             'n_layers': len(self.layers),
             'n_discontinuities': len(self.layers) - 1,  # discontinuities between layers so not include surface
-            'discontinuities': [l["name"] for l in self.layers[1::]]  # exclude surface
+            'discontinuities': list(self.layers.keys())[1:]  # exclude surface
         }
 
         # Add layer information
         info['layers'] = []
-        for layer in self.layers:
+        for layer_name, points in self.layers.items():
             layer_info = {
-                'name': layer['name'],
-                'n_points': len(layer['points']),
+                'name': layer_name,
+                'n_points': len(points),
                 'depth_range': (
-                    min(p['depth'] for p in layer['points']),
-                    max(p['depth'] for p in layer['points'])
+                    min(p['depth'] for p in points),
+                    max(p['depth'] for p in points)
                 )
             }
             info['layers'].append(layer_info)
@@ -537,13 +546,13 @@ class PlanetModel:
         """
         layer_info = []
 
-        for layer in self.layers:
-            depths = [p['depth'] for p in layer['points']]
-            radii = [p['radius'] for p in layer['points']]
+        for layer_name, points in self.layers.items():
+            depths = [p['depth'] for p in points]
+            radii = [p['radius'] for p in points]
 
             info = {
-                'name': layer['name'],
-                'n_points': len(layer['points']),
+                'name': layer_name,
+                'n_points': len(points),
                 'depth_range': (min(depths), max(depths)),
                 'radius_range': (min(radii), max(radii)),
                 'properties': {}
@@ -551,7 +560,7 @@ class PlanetModel:
 
             # Add property ranges for this layer
             for prop in ['vp', 'vs', 'rho']:
-                values = [p[prop] for p in layer['points']]
+                values = [p[prop] for p in points]
                 info['properties'][prop] = {
                     'min': min(values),
                     'max': max(values),
@@ -583,9 +592,9 @@ class PlanetModel:
             Discontinuity locations
         """
         discontinuities = []
-        for layer in self.layers:
+        for points in self.layers.values():
             # discontinuity at top of layer
-            discontinuities.append(layer['points'][0]['depth' if as_depths else 'radius'])
+            discontinuities.append(points[0]['depth' if as_depths else 'radius'])
         if not include_radius:
             # remove outer - the first layer
             discontinuities = discontinuities[1::]
