@@ -349,37 +349,27 @@ class PlanetModel:
         """
         Get the full profile for a property as depth/value arrays.
 
-        Parameters
-        ----------
-        name : str
-            Property name ('vp', 'vs', 'rho')
-
-        Returns
-        -------
-        profile : Dict[str, np.ndarray]
-            Dictionary with 'radius' and 'value' arrays, preserving
-            the original depth ordering from the .nd file to maintain
-            discontinuity structure
+        Preserves discontinuity ordering by using a stable sort on depth.
         """
-        if name not in ['vp', 'vs', 'rho']:
+        if name not in {'vp', 'vs', 'rho'}:
             raise ValueError(f"Unknown property: {name}")
 
-        all_radii = []
-        all_values = []
-        all_depths = []
+        # collect (depth, value) pairs
+        depth_value = [
+            (point['depth'], point[name])
+            for points in self.layers.values()
+            for point in points
+        ]
 
-        for points in self.layers.values():
-            for point in points:
-                all_radii.append(point['radius'])
-                all_values.append(point[name])
-                all_depths.append(point['depth'])
+        # stable sort by depth
+        depth_value.sort(key=lambda x: x[0])
 
-        # Sort by depth (NOT radius) to preserve discontinuity ordering; stable keeps duplicate depths in file order
-        sort_idx = np.argsort(all_depths, kind="stable")
+        # unpack once
+        depths, values = map(np.asarray, zip(*depth_value))
 
         return {
-            'radius': np.array(all_radii)[sort_idx],
-            'value': np.array(all_values)[sort_idx]
+            'radius': self.radius - depths,
+            'value': values
         }
 
     # ========== Model Information ========== #
