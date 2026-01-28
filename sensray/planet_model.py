@@ -217,8 +217,14 @@ class PlanetModel:
                         f"{self.nd_file_path}: '{line}'. "
                         f"Expected format: depth vp vs rho"
                     ) from e
-                
+        
+        # Sort each layer's points by depth (ascending)
+        for layer_name, layer_dict in self.layers.items():
+            sorted_items = sorted(layer_dict.items())
+            self.layers[layer_name] = dict(sorted_items)
+
         # Convert depths to radii for internal consistency
+        print(self.radius)
         for layer_dict in self.layers.values():
             for depth, point in layer_dict.items():
                 point['radius'] = self.radius - depth
@@ -254,21 +260,12 @@ class PlanetModel:
     ) -> Union[float, "np.ndarray"]:
         """
         Get property value at one or more depths.
+        Depths have been sorted in ascending order during parsing.
         """
         if property_name not in ['vp', 'vs', 'rho']:
             raise ValueError(f"Unknown property: {property_name}")
 
-        # Efficiently build depth/value arrays from dict-of-dicts
-        all_depths = []
-        all_values = []
-        for layer in self.layers.values():
-            for d, props in layer.items():
-                all_depths.append(d)
-                all_values.append(props[property_name])
-
-        sort_idx = np.argsort(all_depths, kind="stable")
-        sorted_depths = np.array(all_depths)[sort_idx]
-        sorted_values = np.array(all_values)[sort_idx]
+        prop_profile = self.get_property_profile(property_name, asradius=False)
 
         was_scalar = np.isscalar(depth)
         depth_arr = np.asarray(depth, dtype=float)
@@ -284,7 +281,7 @@ class PlanetModel:
                     f"One or more depths outside valid range [0, {self.radius}]"
                 )
 
-        interpolated = np.interp(depth_arr, sorted_depths, sorted_values)
+        interpolated = np.interp(depth_arr, prop_profile['depth'], prop_profile['value'])
         return float(interpolated) if was_scalar else interpolated
 
     def get_property_at_radius(
@@ -345,32 +342,47 @@ class PlanetModel:
         # Use the vectorized depth lookup and return as ndarray
         return np.asarray(self.get_property_at_depth(property_name, depths))
 
-    def get_property_profile(self, name: str) -> Dict[str, np.ndarray]:
+    def get_property_profile(self, names: Union[str, List[str]], asradius: bool = True, average_discontinuities=False) -> Union[Dict[str, np.ndarray], Dict[str, Dict[str, np.ndarray]]]:
         """
-        Get the full profile for a property as depth/value arrays.
+        Get the full profile for one or more properties as depth/value arrays.
 
-        Preserves discontinuity ordering by using a stable sort on depth.
+        If a single property name is given, returns a dict with 'radius' and 'value'.
+        If a list of property names is given, returns a dict mapping each property name to its profile dict.
         """
-        if name not in {'vp', 'vs', 'rho'}:
-            raise ValueError(f"Unknown property: {name}")
+        valid_props = {'vp', 'vs', 'rho'}
+        if isinstance(names, str):
+            names = [names]
+            single = True
+        else:
+            single = False
+        for n in names:
+            if n not in valid_props:
+                raise ValueError(f"Unknown property: {n}")
 
-        # collect (depth, value) pairs
-        depth_value = [
-            (point['depth'], point[name])
+        # collect depths (same for all properties)
+        depth_list = [
+            depth
             for points in self.layers.values()
-            for point in points
+            for depth in points.keys()
         ]
+        # already sorted by depth due to earlier patch
+        depths = np.asarray(depth_list)
+        radius = self.radius - depths
 
-        # stable sort by depth
-        depth_value.sort(key=lambda x: x[0])
+        # collect values for each property
+        result = {}
+        for n in names:
+            values = [
+                point[n]
+                for points in self.layers.values()
+                for point in points.values()
+            ]
+            values = np.asarray(values)
+            result[n] = {'radius' if asradius else 'depth': radius if asradius else depths, 'value': values}
 
-        # unpack once
-        depths, values = map(np.asarray, zip(*depth_value))
-
-        return {
-            'radius': self.radius - depths,
-            'value': values
-        }
+        if single:
+            return result[names[0]]
+        return result
 
     # ========== Model Information ========== #
 
@@ -588,9 +600,10 @@ class PlanetModel:
         for prop in properties:
             if prop not in available_properties:
                 continue
-
-            profile = self.get_property_profile(prop)
-            depths = self.radius - profile['radius']
+            
+            # get profile data of {depths, values}
+            profile = self.get_property_profile(prop, asradius=False)
+            depths = profile['depth']
             values = profile['value']
 
             # Filter by depth
