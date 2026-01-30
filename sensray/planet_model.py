@@ -529,26 +529,6 @@ class PlanetModel:
 
         return discontinuities
 
-        # if not as_depths:
-        #     # Return as radii - need to extract from layer boundaries
-        #     boundaries = set()
-        #     for layer in self.layers:
-        #         radii = [p['radius'] for p in layer['points']]
-        #         boundaries.add(min(radii))
-        #         boundaries.add(max(radii))
-
-        #     # Remove center and surface
-        #     boundaries.discard(0.0)
-        #     if not include_radius:
-        #         boundaries.discard(self.radius)
-
-        #     return sorted(boundaries)
-        # else:
-        #     # Return as depths
-        #     radii = self.get_discontinuities(as_depths=False,
-        #                                      include_radius=include_radius)
-        #     return sorted([self.radius - r for r in radii])
-
     # ========== Visualization ========== #
 
     def plot_profiles(
