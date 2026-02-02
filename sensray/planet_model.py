@@ -16,7 +16,6 @@ from obspy.taup import TauPyModel
 from obspy.taup.taup_create import build_taup_model
 import warnings
 
-
 class PlanetModel:
     """
     A read-only planet model loaded directly from TauP .nd files.
@@ -149,16 +148,17 @@ class PlanetModel:
                     available_models.append(file[:-3])  # Remove .nd extension
 
         return sorted(available_models)
-
+    
     def _parse_nd_file(self) -> None:
-        """Parse the .nd file and extract model structure."""
-        self.layers = []
-        self.discontinuities = []
+        """
+        Parse the .nd file and extract model structure.
+        Each layer is stored as a dict, with the key as the depth.
+        The layer dict is created at the start of the layer and points are added as they are parsed.
+        """
+        self.layers = {}
         self.radius = 0.0
         self._parsed_name = None
-
-        layer_points = []
-        layer_count = 0
+        current_layer_name = None
 
         with open(self.nd_file_path, 'r') as f:
             for line_num, line in enumerate(f, 1):
@@ -171,7 +171,6 @@ class PlanetModel:
                 # Handle comments and extract model name
                 if line.startswith('#'):
                     if 'Model:' in line or 'model:' in line:
-                        # Extract model name from comment
                         parts = line.split(':', 1)
                         if len(parts) > 1:
                             self._parsed_name = parts[1].strip()
@@ -179,28 +178,24 @@ class PlanetModel:
 
                 # Check if this is a discontinuity label
                 if self._is_discontinuity_label(line):
-                    # End current layer if we have points
-                    if layer_points:
-                        # Create layer with previous points
-                        if layer_count == 0:
-                            layer_name = 'surface'
-                        else:
-                            layer_name = f'layer_{layer_count}'
+                    current_layer_name = line.split('#')[0].strip()
 
-                        self.layers.append({
-                            'name': layer_name,
-                            'points': layer_points.copy()
-                        })
-                        layer_points = []
-                        layer_count += 1
-
-                    # Store discontinuity name for next layer
-                    disc_name = line.split('#')[0].strip()
-                    self.discontinuities.append(disc_name)
+                    if current_layer_name in self.layers:
+                        raise ValueError(f"Duplicate layer name '{current_layer_name}' in {self.nd_file_path}")
+                    
+                    self.layers[current_layer_name] = {}
                     continue
 
                 # Parse data line: depth vp vs rho
                 try:
+                    # check if points trying to be added before any layer is defined
+                    if current_layer_name is None:
+                        if len(self.layers) == 0:
+                            current_layer_name = 'surface'
+                        else:
+                            current_layer_name = 'unnamed_layer'
+                        self.layers[current_layer_name] = {}
+
                     parts = line.split()
                     if len(parts) < 4:
                         continue
@@ -210,14 +205,7 @@ class PlanetModel:
                     vs = float(parts[2])
                     rho = float(parts[3])
 
-                    point = {
-                        'depth': depth,
-                        'vp': vp,
-                        'vs': vs,
-                        'rho': rho
-                    }
-
-                    layer_points.append(point)
+                    self.layers[current_layer_name][depth] = {"vp": vp, "vs": vs, "rho": rho}
 
                     # Update radius (maximum depth)
                     if depth > self.radius:
@@ -229,38 +217,17 @@ class PlanetModel:
                         f"{self.nd_file_path}: '{line}'. "
                         f"Expected format: depth vp vs rho"
                     ) from e
-
-        # Add final layer if we have remaining points
-        if layer_points:
-            if layer_count == 0:
-                layer_name = 'surface'
-            elif (self.discontinuities and
-                  layer_count <= len(self.discontinuities)):
-                # Use the last discontinuity name for the final layer
-                if self.discontinuities:
-                    layer_name = self.discontinuities[-1]
-                else:
-                    layer_name = f'layer_{layer_count}'
-            else:
-                layer_name = f'layer_{layer_count}'
-
-            self.layers.append({
-                'name': layer_name,
-                'points': layer_points
-            })
-
-        # If no layers were created but we have discontinuities,
-        # something went wrong
-        if not self.layers and layer_points:
-            self.layers.append({
-                'name': 'default',
-                'points': layer_points
-            })
+        
+        # Sort each layer's points by depth (ascending)
+        for layer_name, layer_dict in self.layers.items():
+            sorted_items = sorted(layer_dict.items())
+            self.layers[layer_name] = dict(sorted_items)
 
         # Convert depths to radii for internal consistency
-        for layer in self.layers:
-            for point in layer['points']:
-                point['radius'] = self.radius - point['depth']
+        print(self.radius)
+        for layer_dict in self.layers.values():
+            for depth, point in layer_dict.items():
+                point['radius'] = self.radius - depth
 
         # Validate model
         if self.radius <= 0:
@@ -293,65 +260,29 @@ class PlanetModel:
     ) -> Union[float, "np.ndarray"]:
         """
         Get property value at one or more depths.
-
-    This function is vectorized: `depth` can be a float or a 1-D array of
-    depths (in km from the surface). When `depth` is an array, a numpy
-    array of interpolated values is returned with the same shape.
-
-        For depths at discontinuities, the value returned corresponds to the
-        layer value according to the ordering in the .nd file.
-
-        Parameters
-        ----------
-        property_name : str
-            Property name ('vp', 'vs', 'rho')
-        depth : float or array-like
-            Depth(s) in km from surface
-
-        Returns
-        -------
-        float or ndarray
-            Interpolated property value(s)
+        Depths have been sorted in ascending order during parsing.
         """
         if property_name not in ['vp', 'vs', 'rho']:
             raise ValueError(f"Unknown property: {property_name}")
 
-        # Build sorted depth/value arrays once; use stable sort to keep duplicates in file order
-        all_depths = []
-        all_values = []
-        for layer in self.layers:
-            for point in layer['points']:
-                all_depths.append(point['depth'])
-                all_values.append(point[property_name])
+        prop_profile = self.get_property_profile(property_name, asradius=False)
 
-        sort_idx = np.argsort(all_depths, kind="stable")
-        sorted_depths = np.array(all_depths)[sort_idx]
-        sorted_values = np.array(all_values)[sort_idx]
-
-        # Convert input to numpy array for vectorized interpolation
         was_scalar = np.isscalar(depth)
         depth_arr = np.asarray(depth, dtype=float)
 
         if depth_arr.ndim == 0:
             if depth_arr < 0 or depth_arr > self.radius:
                 raise ValueError(
-                    "Depth {} outside valid range [0, {}]".format(
-                        float(depth_arr), self.radius
-                    )
+                    f"Depth {float(depth_arr)} outside valid range [0, {self.radius}]"
                 )
         else:
             if np.any((depth_arr < 0) | (depth_arr > self.radius)):
                 raise ValueError(
-                    "One or more depths outside valid range [0, {}]".format(
-                        self.radius
-                    )
+                    f"One or more depths outside valid range [0, {self.radius}]"
                 )
 
-        interpolated = np.interp(depth_arr, sorted_depths, sorted_values)
-
-        if was_scalar:
-            return float(interpolated)
-        return interpolated
+        interpolated = np.interp(depth_arr, prop_profile['depth'], prop_profile['value'])
+        return float(interpolated) if was_scalar else interpolated
 
     def get_property_at_radius(
         self, property_name: str, radius: Union[float, "np.ndarray"]
@@ -411,42 +342,47 @@ class PlanetModel:
         # Use the vectorized depth lookup and return as ndarray
         return np.asarray(self.get_property_at_depth(property_name, depths))
 
-    def get_property_profile(self, name: str) -> Dict[str, np.ndarray]:
+    def get_property_profile(self, names: Union[str, List[str]], asradius: bool = True, average_discontinuities=False) -> Union[Dict[str, np.ndarray], Dict[str, Dict[str, np.ndarray]]]:
         """
-        Get the full profile for a property as depth/value arrays.
+        Get the full profile for one or more properties as depth/value arrays.
 
-        Parameters
-        ----------
-        name : str
-            Property name ('vp', 'vs', 'rho')
-
-        Returns
-        -------
-        profile : Dict[str, np.ndarray]
-            Dictionary with 'radius' and 'value' arrays, preserving
-            the original depth ordering from the .nd file to maintain
-            discontinuity structure
+        If a single property name is given, returns a dict with 'radius' and 'value'.
+        If a list of property names is given, returns a dict mapping each property name to its profile dict.
         """
-        if name not in ['vp', 'vs', 'rho']:
-            raise ValueError(f"Unknown property: {name}")
+        valid_props = {'vp', 'vs', 'rho'}
+        if isinstance(names, str):
+            names = [names]
+            single = True
+        else:
+            single = False
+        for n in names:
+            if n not in valid_props:
+                raise ValueError(f"Unknown property: {n}")
 
-        all_radii = []
-        all_values = []
-        all_depths = []
+        # collect depths (same for all properties)
+        depth_list = [
+            depth
+            for points in self.layers.values()
+            for depth in points.keys()
+        ]
+        # already sorted by depth due to earlier patch
+        depths = np.asarray(depth_list)
+        radius = self.radius - depths
 
-        for layer in self.layers:
-            for point in layer['points']:
-                all_radii.append(point['radius'])
-                all_values.append(point[name])
-                all_depths.append(point['depth'])
+        # collect values for each property
+        result = {}
+        for n in names:
+            values = [
+                point[n]
+                for points in self.layers.values()
+                for point in points.values()
+            ]
+            values = np.asarray(values)
+            result[n] = {'radius' if asradius else 'depth': radius if asradius else depths, 'value': values}
 
-        # Sort by depth (NOT radius) to preserve discontinuity ordering; stable keeps duplicate depths in file order
-        sort_idx = np.argsort(all_depths, kind="stable")
-
-        return {
-            'radius': np.array(all_radii)[sort_idx],
-            'value': np.array(all_values)[sort_idx]
-        }
+        if single:
+            return result[names[0]]
+        return result
 
     # ========== Model Information ========== #
 
@@ -466,22 +402,10 @@ class PlanetModel:
             'properties': properties,
             'n_properties': len(properties),
             'n_layers': len(self.layers),
-            'n_discontinuities': len(self.discontinuities),
-            'discontinuities': self.discontinuities.copy()
+            'n_discontinuities': len(self.layers) - 1,  # discontinuities between layers so not include surface
+            'discontinuities': list(self.layers.keys())[1:],  # exclude surface
+            'layers': self.get_layer_info(properties=properties),
         }
-
-        # Add layer information
-        info['layers'] = []
-        for layer in self.layers:
-            layer_info = {
-                'name': layer['name'],
-                'n_points': len(layer['points']),
-                'depth_range': (
-                    min(p['depth'] for p in layer['points']),
-                    max(p['depth'] for p in layer['points'])
-                )
-            }
-            info['layers'].append(layer_info)
 
         return info
 
@@ -533,77 +457,77 @@ class PlanetModel:
         self._taupy_model = TauPyModel(model=model_path)
         return self._taupy_model
 
-    def get_layer_info(self) -> List[Dict[str, Any]]:
+    def get_layer_info(self, properties: Optional[List[str]] = None) -> Dict[str, Dict[str, Any]]:
         """
         Get detailed information about each layer.
+        Parameters
+        ----------
+        properties : List[str], optional
+            List of properties to include stats for.
+            Default: ['vp', 'vs', 'rho']
 
         Returns
         -------
-        List[Dict]
-            List of layer information dictionaries
+        Dict[str, Dict[str, Any]]
+            Dictionary of layer information dictionaries
         """
-        layer_info = []
+        layer_info = {}
+        if properties is None:
+            properties = ['vp', 'vs', 'rho']
 
-        for layer in self.layers:
-            depths = [p['depth'] for p in layer['points']]
-            radii = [p['radius'] for p in layer['points']]
-
-            info = {
-                'name': layer['name'],
-                'n_points': len(layer['points']),
-                'depth_range': (min(depths), max(depths)),
-                'radius_range': (min(radii), max(radii)),
-                'properties': {}
+        for layer_name, points in self.layers.items():
+            layer_info[layer_name] = {
+                'name': layer_name,
+                'n_points': len(points),
+                'depth_range': (
+                    min(points.keys()),
+                    max(points.keys())
+                ),
+                'properties': {},
             }
 
-            # Add property ranges for this layer
-            for prop in ['vp', 'vs', 'rho']:
-                values = [p[prop] for p in layer['points']]
-                info['properties'][prop] = {
+            for prop in properties:
+                values = [p[prop] for p in points.values()]
+                layer_info[layer_name]['properties'][prop] = {
                     'min': min(values),
                     'max': max(values),
                     'mean': np.mean(values)
                 }
 
-            layer_info.append(info)
-
         return layer_info
 
     def get_discontinuities(self, as_depths: bool = False,
-                            include_radius: bool = True) -> List[float]:
+                            include_radius: bool = True, outwards: bool = True) -> List[float]:
         """
-        Get discontinuity locations.
+        Get discontinuity locations from the surface inward.
 
         Parameters
         ----------
         as_depths : bool
             If True, return as depths from surface.
             If False, return as radii from center.
+        include_radius : bool
+            If False, exclude the outer radius from the list.
+        outwards : bool
+            If True, return discontinuities from center outwards.
 
         Returns
         -------
         List[float]
             Discontinuity locations
         """
+        # get first point from each layer as discontinuity
+        discontinuities = [list(v.keys())[0] for v in self.layers.values()]
+        if not include_radius:
+            # remove outer - the first layer
+            discontinuities = discontinuities[1::]
+        if outwards:
+            # reverse to get from core outwards
+            discontinuities = discontinuities[::-1]
         if not as_depths:
-            # Return as radii - need to extract from layer boundaries
-            boundaries = set()
-            for layer in self.layers:
-                radii = [p['radius'] for p in layer['points']]
-                boundaries.add(min(radii))
-                boundaries.add(max(radii))
+            discontinuities = [self.radius - d for d in discontinuities]
 
-            # Remove center and surface
-            boundaries.discard(0.0)
-            if not include_radius:
-                boundaries.discard(self.radius)
-
-            return sorted(boundaries)
-        else:
-            # Return as depths
-            radii = self.get_discontinuities(as_depths=False,
-                                             include_radius=include_radius)
-            return sorted([self.radius - r for r in radii])
+        return discontinuities
 
     # ========== Visualization ========== #
 
@@ -656,9 +580,10 @@ class PlanetModel:
         for prop in properties:
             if prop not in available_properties:
                 continue
-
-            profile = self.get_property_profile(prop)
-            depths = self.radius - profile['radius']
+            
+            # get profile data of {depths, values}
+            profile = self.get_property_profile(prop, asradius=False)
+            depths = profile['depth']
             values = profile['value']
 
             # Filter by depth
