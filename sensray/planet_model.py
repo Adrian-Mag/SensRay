@@ -191,6 +191,14 @@ class PlanetModel:
 
                 # Parse data line: depth vp vs rho
                 try:
+                    # # check if points trying to be added before any layer is defined
+                    # if current_layer_name is None:
+                    #     if len(self.layers) == 0:
+                    #         current_layer_name = 'surface'
+                    #     # else:
+                    #     #     current_layer_name = 'unnamed_layer'
+                    #     self.layers[current_layer_name] = {prop: [] for prop in props}
+
                     parts = line.split()
                     if len(parts) < 4:
                         continue
@@ -215,7 +223,12 @@ class PlanetModel:
                         f"Expected format: depth vp vs rho"
                     ) from e
         
-        # # Sort each layer's points by depth (ascending) and add radius
+        # # Sort each layer's points by depth (ascending)
+        # for layer_name, layer_dict in self.layers.items():
+        #     sorted_items = sorted(layer_dict.items())
+        #     self.layers[layer_name] = dict(sorted_items)
+
+        # Convert depths to radii for internal consistency
         for layer_dict in self.layers.values():
             # sort by depth just in case, and convert to radius
             idx = np.argsort(layer_dict['depth'])
@@ -248,17 +261,17 @@ class PlanetModel:
         return bool(line.strip()) and not line.startswith('#')
 
     # ========== Read-Only Property Access ========== #
-    def layerwise_linear_interp(self, query, prop='vp'):
+    def layerwise_linear_interp(self, query, layers, prop='vp'):
         query = np.asarray(query)
         result = np.full_like(query, np.nan, dtype=float)
         # Precompute layer bounds
         layer_bounds = []
-        for layer in self.layers.values():
+        for layer in layers.values():
             layer_depths = layer["depth"]
             # Extract property values for this layer using float key lookup
             layer_values = layer[prop]
             layer_bounds.append((layer_depths[0], layer_depths[-1], layer_depths, layer_values))
-        n_layers = len(self.layers)
+        n_layers = len(layer_bounds)
         for i, (start, end, layer_depths, layer_values) in enumerate(layer_bounds):
             # For all but the last layer, exclude the upper boundary
             if i < n_layers - 1:
@@ -294,8 +307,8 @@ class PlanetModel:
                 raise ValueError(
                     f"One or more depths outside valid range [0, {self.radius}]"
                 )
-        print(prop_profile['depth'], prop_profile[property_name])
-        interpolated = self.layerwise_linear_interp(depth_arr, prop=property_name)
+        # print(prop_profile['depth'], prop_profile['value'])
+        interpolated = self.layerwise_linear_interp(depth_arr, self.layers, prop=property_name)
         # interpolated = np.interp(depth_arr, prop_profile['depth'], prop_profile['value'])
         return float(interpolated) if was_scalar else interpolated
 
@@ -368,18 +381,20 @@ class PlanetModel:
         if isinstance(names, str):
             names = [names]
 
-        result = {k: np.array([]) for k in ["radius" if asradius else "depth"]+names}
+        result = {k: [] for k in ["radius" if asradius else "depth"]+names}
+        # print(result)
         for layer in self.layers.values():
             if asradius:
-                result["radius"] = np.append(result["radius"], layer["radius"])
+                result["radius"].append(layer["radius"])
             else:
-                result["depth"] = np.append(result["depth"], layer["depth"])
+                result["depth"].append(layer["depth"])
             for n in names:
                 if n not in valid_props:
                     raise ValueError(f"Unknown property: {n}")
-                result[n] = np.append(result[n], layer[n])
-        print(result)
-
+                result[n].append(layer[n])
+        for prop in result.keys():
+            result[prop] = np.concatenate(result[prop])
+        # print(type(result["depth"]))
         return result
 
     # ========== Model Information ========== #
@@ -495,7 +510,7 @@ class PlanetModel:
         return layer_info
 
     def get_discontinuities(self, as_depths: bool = False,
-                            include_radius: bool = True, outwards: bool = True) -> Dict[str, float]:
+                            include_radius: bool = True, outwards: bool = True) -> dict[str, list[float]]:
         """
         Get discontinuity locations from the surface inward.
 
@@ -511,32 +526,30 @@ class PlanetModel:
 
         Returns
         -------
-        List[float]
-            Discontinuity locations
+        Dict[str, List[float]]
+            Discontinuity locations by layer name, ordered from surface inward.
         """
+        props = ["vp", "vs", "rho"]
         discontinuities = {}
-        # get first point from each layer as discontinuity
-        layers = list(self.layers.values())
-        for ind in range(len(layers)-1):
-            layer_above = layers[ind]
-            layer_below = layers[ind+1]
-            # check if layer_above and layer_below have depth and properties
-            if len(layer_above["depth"]) == 0 or len(layer_below["depth"]) == 0:
-                continue
-            discontinuities[layer_above["depth" if as_depths else "radius"][-1]] = {
-                "above": {"vp": layer_above["vp"][-1], "vs": layer_above["vs"][-1], "rho": layer_above["rho"][-1]},
-                "below": {"vp": layer_below["vp"][0], "vs": layer_below["vs"][0], "rho": layer_below["rho"][0]}
-                }
-
+        layer_inds = list(self.layers.keys())
+        for i in range(1, len(layer_inds)):
+            upper_layer = self.layers[layer_inds[i-1]]
+            lower_layer = self.layers[layer_inds[i]]
+            discontinuities[lower_layer["depth" if as_depths else "radius"][0]] = {
+                "upper": {p[0] for p in [upper_layer[prop] for prop in props]},
+                "lower": {p[-1] for p in [lower_layer[prop] for prop in props]}
+            }
 
         if not include_radius:
             # remove outer - the first layer
-            first_layer = list(discontinuities.keys())[0]
-            del discontinuities[first_layer]
+            layer_names = list(discontinuities.keys())
+            discontinuities = {name: discontinuities[name] for name in layer_names[1::]}
         if outwards:
             # reverse to get from core outwards
-            discontinuities = dict(reversed(list(discontinuities.items())))
-        
+            layer_names = list(discontinuities.keys())
+            layer_names.reverse()
+            discontinuities = {name: discontinuities[name] for name in layer_names}
+
         return discontinuities
 
     # ========== Visualization ========== #
