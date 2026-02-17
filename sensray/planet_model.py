@@ -507,8 +507,10 @@ class PlanetModel:
 
         return layer_info
 
-    def get_discontinuities(self, as_depths: bool = False,
-                            include_radius: bool = True, outwards: bool = True) -> dict[str, list[float]]:
+    def get_discontinuities(self,
+                            include_radius: bool = True, 
+                            outwards: bool = True
+                            ) -> dict[str, dict[str, float]]:
         """
         Get discontinuity locations from the surface inward.
 
@@ -524,29 +526,36 @@ class PlanetModel:
 
         Returns
         -------
-        Dict[str, List[float]]
+        Dict[str, Dict[str, float]]
             Discontinuity locations by layer name, ordered from surface inward.
         """
         props = ["vp", "vs", "rho"]
         discontinuities = {}
-        layer_inds = list(self.layers.keys())
-        for i in range(1, len(layer_inds)):
-            upper_layer = self.layers[layer_inds[i-1]]
-            lower_layer = self.layers[layer_inds[i]]
-            discontinuities[lower_layer["depth" if as_depths else "radius"][0]] = {
-                "upper": {p[0] for p in [upper_layer[prop] for prop in props]},
-                "lower": {p[-1] for p in [lower_layer[prop] for prop in props]}
+
+        layer_names = list(self.layers.keys())
+        for i in range(len(layer_names)):
+            if outwards: 
+                i = len(layer_names) - 1 - i  # reverse order if outwards
+            upper_layer = self.layers[layer_names[i-1]] if i > 0 else None
+            lower_layer = self.layers[layer_names[i]]
+            if lower_layer["depth"][0] == 0 and not include_radius:
+                continue  # skip the discontinuity a depth=0 if not including radius
+            discontinuities[layer_names[i]] = {
+                "upper": {prop: upper_layer[prop][-1] if upper_layer else None for prop in props},
+                "lower": {prop: lower_layer[prop][0] for prop in props},
+                "depth": lower_layer["depth"][0],
+                "radius": lower_layer["radius"][0],
             }
 
-        if not include_radius:
-            # remove outer - the first layer
-            layer_names = list(discontinuities.keys())
-            discontinuities = {name: discontinuities[name] for name in layer_names[1::]}
-        if outwards:
-            # reverse to get from core outwards
-            layer_names = list(discontinuities.keys())
-            layer_names.reverse()
-            discontinuities = {name: discontinuities[name] for name in layer_names}
+        # if not include_radius:
+        #     # remove outer - the first layer
+        #     layer_names = list(discontinuities.keys())
+        #     discontinuities = {name: discontinuities[name] for name in layer_names[1::]}
+        # if outwards:
+        #     # reverse to get from core outwards
+        #     layer_names = list(discontinuities.keys())
+        #     layer_names.reverse()
+        #     discontinuities = {name: discontinuities[name] for name in layer_names}
 
         return discontinuities
 
@@ -619,7 +628,8 @@ class PlanetModel:
 
         # Add discontinuities
         if show_discontinuities:
-            disc_depths = np.array(list(self.get_discontinuities(as_depths=True).keys()), dtype=float)
+            disc_depths = np.array(list(d["depth"] for d in self.get_discontinuities().values()), dtype=float)
+            # disc_depths = np.array(list(self.get_discontinuities(as_depths=True).keys()), dtype=float)
             for depth in disc_depths:
                 if depth <= max_depth:
                     ax.axhline(depth, color='gray', linestyle='--', alpha=0.7)
