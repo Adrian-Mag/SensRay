@@ -382,7 +382,6 @@ class PlanetModel:
             names = [names]
 
         result = {k: [] for k in ["radius" if asradius else "depth"]+names}
-        # print(result)
         for layer in self.layers.values():
             if asradius:
                 result["radius"].append(layer["radius"])
@@ -394,7 +393,6 @@ class PlanetModel:
                 result[n].append(layer[n])
         for prop in result.keys():
             result[prop] = np.concatenate(result[prop])
-        # print(type(result["depth"]))
         return result
 
     # ========== Model Information ========== #
@@ -614,13 +612,14 @@ class PlanetModel:
             depths_plot = depths[mask]
             values_plot = values[mask]
 
+            prop_label = "$v_{" + prop[1] + "}$ (km/s)" if prop[0].lower() == "v" else "\u03C1 (g/cm$^3$)"
             ax.plot(values_plot, depths_plot,
                     color=colors.get(prop, 'black'),
-                    label=prop, linewidth=2)
+                    label=prop_label, linewidth=2)
 
         # Add discontinuities
         if show_discontinuities:
-            disc_depths = list(self.get_discontinuities(as_depths=True).keys())
+            disc_depths = np.array(list(self.get_discontinuities(as_depths=True).keys()), dtype=float)
             for depth in disc_depths:
                 if depth <= max_depth:
                     ax.axhline(depth, color='gray', linestyle='--', alpha=0.7)
