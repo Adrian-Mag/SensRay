@@ -675,7 +675,10 @@ class PlanetMesh:
                            plane_normal=(0, 1, 0),
                            plane_origin=(0, 0, 0),
                            property_name: str = "vp",
+                           property_label: Optional[str] = None,
                            show_rays: Optional[List[Any]] = None,
+                           colmap: str = 'viridis',
+                           colourbar_dims=(0.6, 0.08),
                            **kwargs) -> Any:
         """
         Plot cross-section using plane-based clipping.
@@ -691,8 +694,12 @@ class PlanetMesh:
             Point on clipping plane
         property_name : str
             Property to color by
+        property_label : str, optional
+            Label for property in scalar bar. If None, uses property_name.
         show_rays : list, optional
             List of ObsPy rays to overlay
+        colmap : str
+            Colormap for property visualization (default: 'viridis')
         **kwargs
             Additional plotting arguments
 
@@ -723,14 +730,22 @@ class PlanetMesh:
         import pyvista as _pv
         plotter = _pv.Plotter()
 
+        scalar_bar_args = {
+            "position_x": 0.5 - 0.5*colourbar_dims[0],  # Centered (0.0 = left, 1.0 = right)
+            "title": property_label if property_label is not None else property_name,
+            "width": colourbar_dims[0],
+            "height": colourbar_dims[1],
+        }
+
         # Add clipped mesh
         plotter.add_mesh(
             clipped,
             scalars=property_name,
             show_edges=kwargs.get('show_edges', True),
-            cmap=kwargs.get('cmap', 'viridis'),
+            cmap=kwargs.get('cmap', colmap),
+            scalar_bar_args=scalar_bar_args,
             **{k: v for k, v in kwargs.items()
-               if k not in ['show_edges', 'cmap', 'show_rays']}
+               if k not in ['show_edges', 'cmap', 'show_rays', 'scalar_bar_args']},
         )
 
         # Overlay rays if provided
@@ -745,6 +760,7 @@ class PlanetMesh:
     def plot_spherical_shell(self,
                              radius_km: float,
                              property_name: str = "vp",
+                             colmap: str = 'viridis',
                              **kwargs) -> Any:
         """
         Plot spherical shell at given radius.
@@ -801,7 +817,7 @@ class PlanetMesh:
         plotter.add_mesh(
             shell_sampled,
             scalars=property_name,
-            cmap=kwargs.get('cmap', 'viridis'),
+            cmap=kwargs.get('cmap', colmap),
             **{k: v for k, v in kwargs.items() if k != 'cmap'}
         )
 
