@@ -261,26 +261,36 @@ class PlanetModel:
         return bool(line.strip()) and not line.startswith('#')
 
     # ========== Read-Only Property Access ========== #
-    def layerwise_linear_interp(self, query, layers, prop='vp'):
-        query = np.asarray(query)
-        result = np.full_like(query, np.nan, dtype=float)
-        # Precompute layer bounds
-        layer_bounds = []
-        for layer in layers.values():
-            layer_depths = layer["depth"]
-            # Extract property values for this layer using float key lookup
-            layer_values = layer[prop]
-            layer_bounds.append((layer_depths[0], layer_depths[-1], layer_depths, layer_values))
-        n_layers = len(layer_bounds)
-        for i, (start, end, layer_depths, layer_values) in enumerate(layer_bounds):
-            # For all but the last layer, exclude the upper boundary
-            if i < n_layers - 1:
-                mask = (query >= start) & (query < end)
-            else:
-                mask = (query >= start) & (query <= end)
-            if np.any(mask):
-                result[mask] = np.interp(query[mask], layer_depths, layer_values)
-        return result
+    def layerwise_linear_interp(self, query, prop='vp', using_depths=True):
+        '''
+        Interpolate a property across multiple layers, handling discontinuities at layer boundaries.
+        '''
+        query = np.asarray(query, dtype=float)
+
+        # Validate property name
+        if prop not in ['vp', 'vs', 'rho']:
+            raise ValueError(f"Unknown property: {prop}")
+        # Validate query range
+        if np.any((query < 0) | (query > self.radius)):
+            raise ValueError(
+                f"One or more values outside valid range [0, {self.radius}]"
+            )
+        # Concatenate all depths/radii and values
+        all_points = []
+        all_values = []
+        for layer in self.layers.values():
+            arr = np.array(layer["depth" if using_depths else "radius"])
+            vals = np.array(layer[prop])
+            all_points.append(arr)
+            all_values.append(vals)
+        points = np.concatenate(all_points)
+        values = np.concatenate(all_values)
+        # Sort in increasing order for interp
+        sort_idx = np.argsort(points)
+        points = points[sort_idx]
+        values = values[sort_idx]
+        # Interpolate
+        return np.interp(query, points, values)
 
     def get_property_at_depth(
         self, property_name: str, depth: Union[float, "np.ndarray"]
@@ -289,38 +299,18 @@ class PlanetModel:
         Get property value at one or more depths.
         Depths have been sorted in ascending order during parsing.
         """
-        if property_name not in ['vp', 'vs', 'rho']:
-            raise ValueError(f"Unknown property: {property_name}")
-
-        prop_profile = self.get_property_profile(property_name, asradius=False)
-
-        was_scalar = np.isscalar(depth)
-        depth_arr = np.asarray(depth, dtype=float)
-
-        if depth_arr.ndim == 0:
-            if depth_arr < 0 or depth_arr > self.radius:
-                raise ValueError(
-                    f"Depth {float(depth_arr)} outside valid range [0, {self.radius}]"
-                )
-        else:
-            if np.any((depth_arr < 0) | (depth_arr > self.radius)):
-                raise ValueError(
-                    f"One or more depths outside valid range [0, {self.radius}]"
-                )
-        # print(prop_profile['depth'], prop_profile['value'])
-        interpolated = self.layerwise_linear_interp(depth_arr, self.layers, prop=property_name)
-        # interpolated = np.interp(depth_arr, prop_profile['depth'], prop_profile['value'])
-        return float(interpolated) if was_scalar else interpolated
+        interpolated = self.layerwise_linear_interp(depth, prop=property_name)
+        return float(interpolated) if np.isscalar(depth) else interpolated
 
     def get_property_at_radius(
         self, property_name: str, radius: Union[float, "np.ndarray"]
     ) -> Union[float, "np.ndarray"]:
-        """Get property value at a specific radius.
-
+        """
+        Get property value at a specific radius.
         Accepts scalar or array-like `radius` and returns matching shape.
         """
-        depth = self.radius - np.asarray(radius)
-        return self.get_property_at_depth(property_name, depth)
+        interpolated = self.layerwise_linear_interp(radius, prop=property_name, using_depths=False)
+        return float(interpolated) if np.isscalar(radius) else interpolated
 
     def get_property_at_3d_points(
         self, property_name: str, points: np.ndarray
@@ -348,9 +338,6 @@ class PlanetModel:
         - (3, N): coordinates as rows [x_coords, y_coords, z_coords]
                  (quadpy convention)
         """
-        if property_name not in ['vp', 'vs', 'rho']:
-            raise ValueError(f"Unknown property: {property_name}")
-
         if points.ndim != 2:
             raise ValueError("Points array must be 2-dimensional")
 
@@ -365,17 +352,14 @@ class PlanetModel:
 
         # Convert Cartesian to radius (vectorized)
         radii = np.linalg.norm(points, axis=1)
-        depths = self.radius - radii
 
         # Use the vectorized depth lookup and return as ndarray
-        return np.asarray(self.get_property_at_depth(property_name, depths))
+        return np.asarray(self.get_property_at_radius(property_name, radii))
 
-    def get_property_profile(self, names: Union[str, List[str]], asradius: bool = True) -> Dict[str, Any]:
+    def get_property_profile(self, names: Union[str, List[str]], asradius: bool = True) -> Dict[str, np.ndarray]:
         """
         Get the full profile for one or more properties as depth/value arrays.
-
-        If a single property name is given, returns a dict with 'radius' and 'prop'.
-        If a list of property names is given, returns a dict mapping each property name to its profile dict.
+        If a list of property names is given, returns a dict mapping each property name to its profile array.
         """
         valid_props = {'vp', 'vs', 'rho'}
         if isinstance(names, str):
