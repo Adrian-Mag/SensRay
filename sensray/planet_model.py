@@ -452,7 +452,7 @@ class PlanetModel:
         self._taupy_model = TauPyModel(model=model_path)
         return self._taupy_model
 
-    def get_layer_info(self, properties: Optional[List[str]] = None) -> Dict[str, Dict[str, Any]]:
+    def get_layer_info(self, properties: Optional[List[str]] = None, outwards: bool = False) -> Dict[str, Dict[str, Any]]:
         """
         Get detailed information about each layer.
         Parameters
@@ -470,13 +470,22 @@ class PlanetModel:
         if properties is None:
             properties = ['vp', 'vs', 'rho']
 
-        for layer_name, data in self.layers.items():
+        layer_names = list(self.layers.keys())
+        if outwards:
+            layer_names.reverse()
+
+        for layer_name in layer_names:
+            data = self.layers[layer_name]
             layer_info[layer_name] = {
                 'name': layer_name,
                 'n_points': len(data["depth"]),
                 'depth_range': (
                     min(data["depth"]),
                     max(data["depth"])
+                ),
+                'radius_range': (
+                    min(data["radius"]),
+                    max(data["radius"])
                 ),
                 'properties': {},
             }

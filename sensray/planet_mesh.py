@@ -733,6 +733,7 @@ class PlanetMesh:
         scalar_bar_args = {
             "position_x": 0.5 - 0.5*colourbar_dims[0],  # Centered (0.0 = left, 1.0 = right)
             "title": property_label if property_label is not None else property_name,
+            "title_font_size": 18,
             "width": colourbar_dims[0],
             "height": colourbar_dims[1],
         }
