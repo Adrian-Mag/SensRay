@@ -148,12 +148,24 @@ class PlanetModel:
                     available_models.append(file[:-3])  # Remove .nd extension
 
         return sorted(available_models)
-    
+
     def _parse_nd_file(self) -> None:
         """
         Parse the .nd file and extract model structure.
-        Each layer is stored as a dict, with the key as the depth.
-        The layer dict is created at the start of the layer and points are added as they are parsed.
+
+        Each layer is stored as a dict of named NumPy arrays:
+            self.layers[layer_name] = {
+                'depth':  np.ndarray,   # km, ascending
+                'vp':     np.ndarray,   # km/s
+                'vs':     np.ndarray,   # km/s
+                'rho':    np.ndarray,   # g/cm³
+                'radius': np.ndarray,   # km  (= planet_radius - depth)
+            }
+
+        The first layer is always named 'surface' (data before the first
+        discontinuity label).  Subsequent layers take their names from the
+        discontinuity labels in the file.  Duplicate layer names raise
+        ValueError.
         """
         self.radius = 0.0
         self._parsed_name = None
@@ -185,20 +197,12 @@ class PlanetModel:
 
                     if current_layer_name in self.layers:
                         raise ValueError(f"Duplicate layer name '{current_layer_name}' in {self.nd_file_path}")
-                    
+
                     self.layers[current_layer_name] = {prop: [] for prop in props}
                     continue
 
                 # Parse data line: depth vp vs rho
                 try:
-                    # # check if points trying to be added before any layer is defined
-                    # if current_layer_name is None:
-                    #     if len(self.layers) == 0:
-                    #         current_layer_name = 'surface'
-                    #     # else:
-                    #     #     current_layer_name = 'unnamed_layer'
-                    #     self.layers[current_layer_name] = {prop: [] for prop in props}
-
                     parts = line.split()
                     if len(parts) < 4:
                         continue
@@ -222,11 +226,6 @@ class PlanetModel:
                         f"{self.nd_file_path}: '{line}'. "
                         f"Expected format: depth vp vs rho"
                     ) from e
-        
-        # # Sort each layer's points by depth (ascending)
-        # for layer_name, layer_dict in self.layers.items():
-        #     sorted_items = sorted(layer_dict.items())
-        #     self.layers[layer_name] = dict(sorted_items)
 
         # Convert depths to radii for internal consistency
         for layer_dict in self.layers.values():
@@ -261,55 +260,55 @@ class PlanetModel:
         return bool(line.strip()) and not line.startswith('#')
 
     # ========== Read-Only Property Access ========== #
-    def layerwise_linear_interp(self, query, prop='vp', using_depths=True):
-        '''
-        Interpolate a property across multiple layers, handling discontinuities at layer boundaries.
-        '''
+    def layerwise_linear_interp(self, query, prop='vp'):
+        """
+        Interpolate a property at one or more depths across all layers.
+
+        Layers are stored depth-ascending per layer and concatenated in
+        file order (shallowest layer first), so at every discontinuity the
+        shallower-side entry always appears before the deeper-side entry in
+        the sorted table.  This gives ``np.interp`` a well-defined
+        piecewise-constant profile with sharp jumps at boundaries.
+
+        Parameters
+        ----------
+        query : float or array-like
+            Depth(s) in km at which to evaluate the property.
+        prop : str
+            Property name: 'vp', 'vs', or 'rho'.
+        """
         query = np.asarray(query, dtype=float)
 
-        # Validate property name
         if prop not in ['vp', 'vs', 'rho']:
             raise ValueError(f"Unknown property: {prop}")
-        # Validate query range
         if np.any((query < 0) | (query > self.radius)):
             raise ValueError(
                 f"One or more values outside valid range [0, {self.radius}]"
             )
-        # Concatenate all depths/radii and values
-        all_points = []
-        all_values = []
-        for layer in self.layers.values():
-            arr = np.array(layer["depth" if using_depths else "radius"])
-            vals = np.array(layer[prop])
-            all_points.append(arr)
-            all_values.append(vals)
-        points = np.concatenate(all_points)
-        values = np.concatenate(all_values)
-        # Sort in increasing order for interp
-        sort_idx = np.argsort(points)
-        points = points[sort_idx]
-        values = values[sort_idx]
-        # Interpolate
-        return np.interp(query, points, values)
+
+        # Concatenate depth and property arrays across all layers.
+        # Layers are ordered shallowest-first (as in the .nd file), and within
+        # each layer depths are already sorted ascending by the parser, so the
+        # globally concatenated array is non-decreasing with the correct
+        # boundary-value ordering at every discontinuity.
+        all_depths = np.concatenate([layer["depth"] for layer in self.layers.values()])
+        all_values = np.concatenate([layer[prop]   for layer in self.layers.values()])
+
+        return np.interp(query, all_depths, all_values)
 
     def get_property_at_depth(
         self, property_name: str, depth: Union[float, "np.ndarray"]
     ) -> Union[float, "np.ndarray"]:
-        """
-        Get property value at one or more depths.
-        Depths have been sorted in ascending order during parsing.
-        """
+        """Get property value at one or more depths (km)."""
         interpolated = self.layerwise_linear_interp(depth, prop=property_name)
         return float(interpolated) if np.isscalar(depth) else interpolated
 
     def get_property_at_radius(
         self, property_name: str, radius: Union[float, "np.ndarray"]
     ) -> Union[float, "np.ndarray"]:
-        """
-        Get property value at a specific radius.
-        Accepts scalar or array-like `radius` and returns matching shape.
-        """
-        interpolated = self.layerwise_linear_interp(radius, prop=property_name, using_depths=False)
+        """Get property value at one or more radii (km)."""
+        depth = self.radius - np.asarray(radius, dtype=float)
+        interpolated = self.layerwise_linear_interp(depth, prop=property_name)
         return float(interpolated) if np.isscalar(radius) else interpolated
 
     def get_property_at_3d_points(
@@ -501,7 +500,7 @@ class PlanetModel:
         return layer_info
 
     def get_discontinuities(self,
-                            include_radius: bool = True, 
+                            include_radius: bool = True,
                             outwards: bool = True
                             ) -> dict[str, dict[str, float]]:
         """
@@ -527,7 +526,7 @@ class PlanetModel:
 
         layer_names = list(self.layers.keys())
         for i in range(len(layer_names)):
-            if outwards: 
+            if outwards:
                 i = len(layer_names) - 1 - i  # reverse order if outwards
             upper_layer = self.layers[layer_names[i-1]] if i > 0 else None
             lower_layer = self.layers[layer_names[i]]
@@ -593,7 +592,7 @@ class PlanetModel:
         for prop in properties:
             if prop not in available_properties:
                 continue
-            
+
             # get profile data of {depths, values}
             profile = self.get_property_profile(prop, asradius=False)
             depths = profile['depth']
