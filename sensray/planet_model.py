@@ -6,6 +6,10 @@ loaded directly from TauP .nd files. The model preserves the exact
 layered structure and discontinuities as defined in the .nd format.
 """
 
+from __future__ import annotations  # PEP 563: lazy evaluation — allows dict[str, ...]
+                                     # on Python 3.8 where built-in generics are not yet
+                                     # subscriptable at runtime.
+
 import numpy as np
 from typing import Dict, List, Optional, Tuple, Any, Union
 import matplotlib.pyplot as plt
