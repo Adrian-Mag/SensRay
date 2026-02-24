@@ -9,7 +9,7 @@ refinement and unified visualization methods.
 from __future__ import annotations
 
 from typing import Optional, Dict, List, Any, TYPE_CHECKING, Callable
-import quadpy
+from . import quadrature
 if TYPE_CHECKING:
     from .planet_model import PlanetModel
 import numpy as np
@@ -37,7 +37,7 @@ class PlanetMesh:
     planet_model : PlanetModel
         The planet model to create a mesh for
     mesh_type : str
-        Type of mesh to generate: "tetrahedral"
+        Type of mesh to generate: "spherical" or "tetrahedral"
 
     Examples
     --------
@@ -48,7 +48,7 @@ class PlanetMesh:
     >>> mesh.plot_cross_section(property_name="vp")
     """
 
-    def __init__(self, planet_model, mesh_type: str = "tetrahedral"):
+    def __init__(self, planet_model, mesh_type: str = "spherical"):
         if mesh_type == "tetrahedral":
             if pv is None:  # pragma: no cover
                 raise ImportError(
@@ -813,6 +813,8 @@ class PlanetMesh:
                             show_centers=False,
                             annotate_radii=False,
                             figsize=(8, 4),
+                            ax=None,
+                            show_plot=True,
                             title=None):
         """
         Plot a property defined per-shell on a 1D spherical radial
@@ -830,6 +832,10 @@ class PlanetMesh:
             Annotate radii values on the plot (may clutter if many shells)
         figsize : tuple, default=(8, 4)
             Figure size (width, height) in inches
+        ax : matplotlib Axes, optional
+            If provided, plot on this Axes. Otherwise, create a new Figure.
+        show_plot : bool, default=True
+            If True, display the plot immediately
         title : str, optional
             Plot title. If None, uses f"{property_name} on 1D spherical mesh"
 
@@ -871,7 +877,10 @@ class PlanetMesh:
 
         centers = 0.5 * (radii[:-1] + radii[1:])
 
-        fig, ax = plt.subplots(1, 1, figsize=figsize)
+        if ax is None:
+            fig, ax = plt.subplots(1, 1, figsize=figsize)
+        else:
+            fig = ax.figure
         # Step plot: use drawstyle='steps-post' or stairs if available Using
         # stairs (clear intent) if matplotlib >= 3.4; otherwise fallback to
         # step
@@ -933,7 +942,8 @@ class PlanetMesh:
         ax.grid(True, linestyle=":", alpha=0.6)
         plt.tight_layout()
 
-        plt.show()
+        if show_plot:
+            plt.show()
         return fig, ax
 
     def list_properties(self,
@@ -1124,7 +1134,8 @@ class PlanetMesh:
         tetra_points = points[tetra_indices]  # shape (N_tets, 4, 3)
 
         n_tets = tetra_points.shape[0]
-        scheme: Any = quadpy.t3.get_good_scheme(5)
+        # Use order 3 quadrature (exact for cubic polynomials)
+        scheme: Any = quadrature.t3.get_good_scheme(3)
 
         # QuadPy expects shape (4, n_tets, 3)
         tetra_qp = np.transpose(tetra_points, (1, 0, 2))  # (4, n_tets, 3)
@@ -1815,7 +1826,7 @@ class PlanetMesh:
 
                 from .coordinates import CoordinateConverter
                 xyz = CoordinateConverter.earth_to_cartesian(
-                    lat_deg, lon_deg, depth_km,
+                    (lat_deg, lon_deg, depth_km),
                     earth_radius=self.planet_model.radius
                 )
                 points.append(xyz)
@@ -1926,6 +1937,7 @@ class PlanetMesh:
         else:
             warnings.warn(f"Metadata file not found: {metadata_path}")
 
+<<<<<<< HEAD
         # Determine mesh type.
         # If metadata contains an explicit mesh_type, validate it.
         # Otherwise auto-detect from existing files (.npz => spherical, .vtu => tetrahedral).
@@ -1959,6 +1971,10 @@ class PlanetMesh:
                     f"expected {npz_path} (spherical) or {vtu_path} (tetrahedral). "
                     "Metadata missing 'mesh_type'."
                 )
+=======
+        # Determine mesh type
+        mesh_type = metadata.get('mesh_type', 'spherical')
+>>>>>>> 3db6bc766911bba710b97122811a522724962344
 
         # Create or validate planet model
         if planet_model is None:
@@ -2171,4 +2187,3 @@ class SphericalPlanetMesh():
                 mesh._point_data[prop_name] = data[key]
 
         return mesh
-

@@ -10,7 +10,7 @@ travel-times and plotting. Those were intentionally removed in favor of
 using ObsPy/TauP and dedicated visualization tools directly.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.5.0"
 __author__ = "PhD Project"
 
 # Public API: import only stable, present modules

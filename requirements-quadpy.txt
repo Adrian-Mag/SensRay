@@ -1,0 +1,2 @@
+# Optional requirements for using quadpy with SensRay
+quadpy>=0.16.0
