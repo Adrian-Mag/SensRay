@@ -540,16 +540,6 @@ class PlanetModel:
                 "radius": lower_layer["radius"][0],
             }
 
-        # if not include_radius:
-        #     # remove outer - the first layer
-        #     layer_names = list(discontinuities.keys())
-        #     discontinuities = {name: discontinuities[name] for name in layer_names[1::]}
-        # if outwards:
-        #     # reverse to get from core outwards
-        #     layer_names = list(discontinuities.keys())
-        #     layer_names.reverse()
-        #     discontinuities = {name: discontinuities[name] for name in layer_names}
-
         return discontinuities
 
     # ========== Visualization ========== #
