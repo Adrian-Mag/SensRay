@@ -224,7 +224,6 @@ class PlanetModel:
             self.layers[layer_name] = dict(sorted_items)
 
         # Convert depths to radii for internal consistency
-        print(self.radius)
         for layer_dict in self.layers.values():
             for depth, point in layer_dict.items():
                 point['radius'] = self.radius - depth
