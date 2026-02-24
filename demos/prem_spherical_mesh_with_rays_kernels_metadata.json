@@ -1,0 +1,19 @@
+{
+  "mesh_type": "spherical",
+  "planet_model_name": "PREM",
+  "planet_model_radius": 6371.0,
+  "generation_parameters": {},
+  "properties": [
+    "vp",
+    "vs",
+    "rho",
+    "P_lengths",
+    "S_lengths",
+    "ScS_lengths",
+    "K_P",
+    "K_S",
+    "K_P_sum"
+  ],
+  "n_cells": 48,
+  "n_points": 49
+}

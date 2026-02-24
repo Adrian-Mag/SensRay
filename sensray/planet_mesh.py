@@ -524,6 +524,7 @@ class PlanetMesh:
         attach_name: Optional[str] = None,
         accumulate: Optional[str] = None,
         epsilon: float = 1e-6,
+        normalize: bool = False,
         replace_existing: bool = True
     ) -> np.ndarray:
         """
@@ -553,6 +554,14 @@ class PlanetMesh:
             Ignored for single ray.
         epsilon : float
             Small regularizer added to denominator to avoid division by zero
+        normalize : bool, optional
+            If True, divides each K̃_j by the cell volume V_j to return the
+            resolution-independent expansion coefficient
+            K_j^coeff = K̃_j / V_j  (units: s km⁻⁴ for spherical shells).
+            Default is False — raw forward-operator entries K̃_j are returned,
+            which is what you want to build the G matrix for an inversion.
+            To post-process an existing K̃_j array, use
+            to_kernel_coefficients().
         replace_existing : bool
             Whether to replace existing cell data with same name
 
@@ -579,8 +588,39 @@ class PlanetMesh:
 
         Notes
         -----
-        The sensitivity kernel relates travel time perturbations to velocity
-        perturbations: δt = ∫ K δv dx, where K = -L/v² and L is path length.
+        **What K̃_j represents (3-D spherical shell basis)**
+
+        The continuous 3-D forward model is
+
+            δt = ∫_Ω K(x) δv(x) dV,   K(x) = −δ_ray(x) / v(x)²
+
+        With spherical-shell indicator basis functions φ_j = 𝟏_{V_j} and a
+        piecewise-constant velocity model δv = Σ_j δv_j φ_j, the forward
+        operator entry (= what this method returns) is
+
+            K̃_j = ∫_{V_j} K(x) dV = −L_j / v_j²      (units: s km⁻¹)
+
+        where L_j is the ray-path length through shell j and v_j is the
+        cell's mean P- (or S-) wave speed.
+
+        **Consequence for multi-resolution comparison**
+
+        K̃_j ∝ V_j, so raw values from different discretisations are NOT
+        directly comparable.  The resolution-independent quantity is the
+        L²(dV) expansion coefficient (mass-matrix inverse × K̃_j):
+
+            K_j^coeff = K̃_j / V_j        (units: s km⁻⁴)
+
+        where the shell volume in a 1-D spherical model is
+
+            V_j = (4π/3) (r_{j+1}³ − r_j³)
+
+        K_j^coeff converges to the continuous kernel K(r) = −(dL/dV) / v(r)²
+        as Δr → 0.  The 1-D approximation K̃_j / Δr_j ignores the r² Jacobian
+        and should not be used on a sphere.
+
+        The correctly conserved quantity across discretisations (total
+        sensitivity) is Σ_j K̃_j (units: s km⁻¹).
         """
         if self.mesh is None:
             raise RuntimeError(
@@ -620,6 +660,8 @@ class PlanetMesh:
             if accumulate == "sum":
                 # Sum all kernels
                 K_sum = K_array.sum(axis=0)
+                if normalize:
+                    K_sum = K_sum / self.cell_volumes
                 name = attach_name or f"Ksum_{property_name}"
                 if name in self.mesh.cell_data and not replace_existing:
                     raise ValueError(
@@ -633,6 +675,10 @@ class PlanetMesh:
                 return K_sum
             else:
                 # Return individual kernels, optionally store
+                if normalize:
+                    vol = self.cell_volumes
+                    K_array = K_array / vol[np.newaxis, :]
+                    kernels = [k / vol for k in kernels]
                 if attach_name is not None:
                     base_name = attach_name or f"K_{property_name}"
                     for i, kernel in enumerate(kernels):
@@ -657,6 +703,9 @@ class PlanetMesh:
             with np.errstate(divide="ignore", invalid="ignore"):
                 kernel[valid] = -lengths[valid] / denom[valid]
 
+            if normalize:
+                kernel = kernel / self.cell_volumes
+
             # Store as cell data
             name = attach_name or f"K_{property_name}"
             if name in self.mesh.cell_data and not replace_existing:
@@ -669,16 +718,98 @@ class PlanetMesh:
 
             return kernel
 
+    # ===== Kernel Coefficients =====
+
+    @property
+    def cell_volumes(self) -> np.ndarray:
+        """
+        Volume of each mesh cell in km³.
+
+        For a spherical mesh, the exact shell volume is used:
+
+            V_j = (4π/3) (r_{j+1}³ − r_j³)
+
+        For a tetrahedral mesh, cell volumes are computed by PyVista.
+
+        Returns
+        -------
+        np.ndarray
+            1D array of shape (n_cells,) with per-cell volumes in km³.
+        """
+        if self.mesh is None:
+            raise RuntimeError(
+                "No mesh generated. Call generate_*_mesh() first."
+            )
+        if isinstance(self.mesh, SphericalPlanetMesh):
+            r = np.asarray(self.mesh.radii, dtype=float)
+            return (4.0 * np.pi / 3.0) * (r[1:] ** 3 - r[:-1] ** 3)
+        else:
+            # Tetrahedral (PyVista UnstructuredGrid)
+            sized = self.mesh.compute_cell_sizes(
+                length=False, area=False, volume=True
+            )
+            return np.asarray(sized.cell_data["Volume"], dtype=float)
+
+    def to_kernel_coefficients(
+        self,
+        K_tilde: np.ndarray
+    ) -> np.ndarray:
+        """
+        Convert raw forward-operator kernel entries K̃_j to the
+        resolution-independent expansion coefficients K_j^coeff.
+
+        Use this when you have already computed K̃_j (e.g. to build the
+        G matrix) and later want the coefficients without recomputing.
+
+        The conversion is:
+
+            K_j^coeff = K̃_j / V_j
+
+        where V_j is the cell volume returned by ``cell_volumes``.
+        For spherical shells V_j = (4π/3)(r_{j+1}³ − r_j³).
+
+        Parameters
+        ----------
+        K_tilde : np.ndarray
+            Raw kernel array, either:
+            - 1D of shape (n_cells,)  — single ray or summed
+            - 2D of shape (n_rays, n_cells) — multiple individual rays
+
+        Returns
+        -------
+        np.ndarray
+            Same shape as ``K_tilde`` with values divided by cell volumes.
+            Units: s km⁻⁴ (for velocity sensitivity on a spherical mesh).
+
+        Examples
+        --------
+        # Build G matrix first, then get coefficients for plotting
+        K_tilde = mesh.compute_sensitivity_kernel(rays, 'vp', accumulate=None)
+        G = K_tilde          # shape (n_rays, n_cells), used in inversion
+        K_coeff = mesh.to_kernel_coefficients(K_tilde)   # for plotting
+
+        # Or directly from a 1D array
+        k = mesh.compute_sensitivity_kernel(ray, 'vp')
+        k_coeff = mesh.to_kernel_coefficients(k)
+        """
+        vol = self.cell_volumes
+        K = np.asarray(K_tilde, dtype=float)
+        if K.ndim == 1:
+            return K / vol
+        elif K.ndim == 2:
+            return K / vol[np.newaxis, :]
+        else:
+            raise ValueError(
+                f"K_tilde must be 1D or 2D, got shape {K.shape}"
+            )
+
     # ===== Visualization =====
 
     def plot_cross_section(self,
                            plane_normal=(0, 1, 0),
                            plane_origin=(0, 0, 0),
                            property_name: str = "vp",
-                           property_label: Optional[str] = None,
                            show_rays: Optional[List[Any]] = None,
-                           colmap: str = 'viridis',
-                           colourbar_dims=(0.6, 0.08),
                            **kwargs) -> Any:
         """
         Plot cross-section using plane-based clipping.
@@ -694,12 +825,8 @@ class PlanetMesh:
             Point on clipping plane
         property_name : str
             Property to color by
-        property_label : str, optional
-            Label for property in scalar bar. If None, uses property_name.
         show_rays : list, optional
             List of ObsPy rays to overlay
-        colmap : str
-            Colormap for property visualization (default: 'viridis')
         **kwargs
             Additional plotting arguments
 
@@ -730,23 +857,14 @@ class PlanetMesh:
         import pyvista as _pv
         plotter = _pv.Plotter()
 
-        scalar_bar_args = {
-            "position_x": 0.5 - 0.5*colourbar_dims[0],  # Centered (0.0 = left, 1.0 = right)
-            "title": property_label if property_label is not None else property_name,
-            "title_font_size": 18,
-            "width": colourbar_dims[0],
-            "height": colourbar_dims[1],
-        }
-
         # Add clipped mesh
         plotter.add_mesh(
             clipped,
             scalars=property_name,
             show_edges=kwargs.get('show_edges', True),
-            cmap=kwargs.get('cmap', colmap),
-            scalar_bar_args=scalar_bar_args,
+            cmap=kwargs.get('cmap', 'viridis'),
             **{k: v for k, v in kwargs.items()
-               if k not in ['show_edges', 'cmap', 'show_rays', 'scalar_bar_args']},
+               if k not in ['show_edges', 'cmap', 'show_rays']}
         )
 
         # Overlay rays if provided
@@ -761,7 +879,6 @@ class PlanetMesh:
     def plot_spherical_shell(self,
                              radius_km: float,
                              property_name: str = "vp",
-                             colmap: str = 'viridis',
                              **kwargs) -> Any:
         """
         Plot spherical shell at given radius.
@@ -818,7 +935,7 @@ class PlanetMesh:
         plotter.add_mesh(
             shell_sampled,
             scalars=property_name,
-            cmap=kwargs.get('cmap', colmap),
+            cmap=kwargs.get('cmap', 'viridis'),
             **{k: v for k, v in kwargs.items() if k != 'cmap'}
         )
 
@@ -1954,8 +2071,39 @@ class PlanetMesh:
         else:
             warnings.warn(f"Metadata file not found: {metadata_path}")
 
-        # Determine mesh type
-        mesh_type = metadata.get('mesh_type', 'spherical')
+        # Determine mesh type.
+        # If metadata contains an explicit mesh_type, validate it.
+        # Otherwise auto-detect from existing files (.npz => spherical, .vtu => tetrahedral).
+        # If both file types exist, require explicit disambiguation via metadata.
+        npz_path = f"{base_path}.npz"
+        vtu_path = f"{base_path}.vtu"
+
+        if 'mesh_type' in metadata:
+            mesh_type = metadata['mesh_type']
+            if mesh_type not in ('spherical', 'tetrahedral'):
+                raise ValueError(
+                    f"Unsupported mesh_type in metadata: {mesh_type}. "
+                    "Supported values: 'spherical', 'tetrahedral'"
+                )
+        else:
+            has_npz = os.path.exists(npz_path)
+            has_vtu = os.path.exists(vtu_path)
+            if has_npz and not has_vtu:
+                mesh_type = 'spherical'
+            elif has_vtu and not has_npz:
+                mesh_type = 'tetrahedral'
+            elif has_npz and has_vtu:
+                raise FileExistsError(
+                    f"Both mesh files found for base '{base_path}': "
+                    f"{npz_path} (spherical) and {vtu_path} (tetrahedral). "
+                    "Please set 'mesh_type' in the metadata or remove one of the files."
+                )
+            else:
+                raise FileNotFoundError(
+                    f"No mesh files found for base '{base_path}': "
+                    f"expected {npz_path} (spherical) or {vtu_path} (tetrahedral). "
+                    "Metadata missing 'mesh_type'."
+                )
 
         # Create or validate planet model
         if planet_model is None:
