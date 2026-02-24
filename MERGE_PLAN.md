@@ -370,25 +370,29 @@ Run with: `python -m pytest tests/ -v`
 
 ---
 
-### Step 7 — Rebase/merge branch onto main *(final step)*
+### Step 7 — Rebase/merge branch onto main ✅ COMPLETE
 
-Once steps 1–6 are complete and all tests pass:
+**Outcome**: `planetmodel_changes` successfully merged into `main`.
 
-```bash
-git checkout main
-git merge planetmodel_changes --no-ff -m "merge: planetmodel_changes — array-based layers, kernel coefficients, lunar models"
+Merge commit `6fe0d1e` on `main`:
+```
+merge: planetmodel_changes — array-based layers, kernel coefficients, lunar models, tests
 ```
 
-Expected conflicts (because both branches touched these files after the common
-ancestor):
-- `sensray/planet_model.py` — main still has the old dict-keyed structure in
-  places; resolve fully in favour of the branch
-- `sensray/planet_mesh.py` — should be clean after Step 1 (branch is a
-  strict superset of main's content)
+**Conflicts encountered and resolved**:
+- `sensray/planet_model.py` (UU) → took branch (entirely new array-based refactor)
+- `sensray/planet_mesh.py` (UU) → took branch (superset with cell_volumes etc.)
+- `sensray/models/weber_core.nd` (AA) → took branch (correct trailing whitespace)
+- `sensray/models/weber_core_resampled_on_M1.nd` (AA) → took branch (correct values)
+- `sensray/models/weber_core_smooth_resampled_on_M1.nd` (AA) → took branch (correct flat inner-core)
+- `demos/01_basic_usage.ipynb` (AA) → took branch (updated demo)
+- `demos/02_ray_tracing_kernels.ipynb` (AA) → took branch (updated demo)
+- `demos/04_spherical_ray_tracing_kernels.ipynb` (AA) → took branch (updated demo)
 
-If conflicts are large, an alternative is to use `git merge -s ours` for files
-where the branch is definitively correct, followed by cherry-picking the
-main-only commits that add value (the Feb 24 demo update).
+**Post-merge test run**: `python -m pytest tests/ -v` → **52 passed, 2 warnings**
+
+All 7 steps complete. The `main` branch now contains the full set of
+improvements from `planetmodel_changes`.
 
 ---
 
