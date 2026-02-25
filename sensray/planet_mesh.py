@@ -642,23 +642,15 @@ class PlanetMesh:
         is_multiple = isinstance(arrival, (list, tuple))
 
         if is_multiple:
-            # Handle multiple rays
-            kernels = []
-            for ray in arrival:
-                # Compute ray path lengths
+            # Handle multiple rays — build K_array directly (n_rays, n_cells).
+            n_cells = len(prop)
+            K_array = np.zeros((len(arrival), n_cells), dtype=float)
+            for i, ray in enumerate(arrival):
                 lengths = self.compute_ray_lengths(ray)
-
-                # Compute kernel: K = -L / (prop^2 + epsilon)
-                kernel = np.zeros_like(lengths, dtype=float)
                 with np.errstate(divide="ignore", invalid="ignore"):
-                    kernel[valid] = -lengths[valid] / denom[valid]
-
-                kernels.append(kernel)
-
-            K_array = np.array(kernels)  # Shape: (n_rays, n_cells)
+                    K_array[i, valid] = -lengths[valid] / denom[valid]
 
             if accumulate == "sum":
-                # Sum all kernels
                 K_sum = K_array.sum(axis=0)
                 if normalize:
                     K_sum = K_sum / self.cell_volumes
@@ -674,24 +666,23 @@ class PlanetMesh:
                 )
                 return K_sum
             else:
-                # Return individual kernels, optionally store
+                # Return individual kernels, optionally normalise and store
                 if normalize:
-                    vol = self.cell_volumes
-                    K_array = K_array / vol[np.newaxis, :]
-                    kernels = [k / vol for k in kernels]
+                    K_array = K_array / self.cell_volumes[np.newaxis, :]
                 if attach_name is not None:
                     base_name = attach_name or f"K_{property_name}"
-                    for i, kernel in enumerate(kernels):
+                    for i in range(len(K_array)):
                         name = f"{base_name}_{i}"
                         if (name in self.mesh.cell_data and
                                 not replace_existing):
                             continue  # Skip if exists and not replacing
-                        self.mesh.cell_data[name] = kernel.astype(np.float32)
-                    msg = (
-                        f"Stored {len(kernels)} individual kernels with "
+                        self.mesh.cell_data[name] = K_array[i].astype(
+                            np.float32
+                        )
+                    print(
+                        f"Stored {len(K_array)} individual kernels with "
                         f"base name: '{base_name}_*'"
                     )
-                    print(msg)
                 return K_array
         else:
             # Handle single ray
