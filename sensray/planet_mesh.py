@@ -936,7 +936,9 @@ class PlanetMesh:
                             property_name: str, *,
                             show_shading=True,
                             show_centers=False,
+                            show_radii=False,
                             annotate_radii=False,
+                            label=None,
                             figsize=(8, 4),
                             ax=None,
                             show_plot=True,
@@ -955,6 +957,8 @@ class PlanetMesh:
             Show markers at shell centers
         annotate_radii : bool, default=False
             Annotate radii values on the plot (may clutter if many shells)
+        label : str, optional
+            Legend label for the property. If None, uses property_name.
         figsize : tuple, default=(8, 4)
             Figure size (width, height) in inches
         ax : matplotlib Axes, optional
@@ -1012,17 +1016,18 @@ class PlanetMesh:
         try:
             ax.stairs(
                 f_j, radii, baseline=None,
-                label=property_name
+                label=property_name if label is None else label
             )
         except Exception:
             ax.plot(
                 r_steps, v_steps, drawstyle="steps-post",
-                label=property_name
+                label=property_name if label is None else label
             )
 
         # Vertical lines for shell edges
-        for r in radii:
-            ax.axvline(r, color="0.85", linewidth=0.8, zorder=0)
+        if show_radii:
+            for r in radii:
+                ax.axvline(r, color="0.85", linewidth=0.8, zorder=0)
 
         # Optional shading of shells for visibility
         if show_shading:
