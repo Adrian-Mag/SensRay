@@ -952,6 +952,202 @@ class PlanetMesh:
 
         return plotter
 
+    def get_spherical_shell_map_image(
+        self,
+        radius_km,
+        property_name="vp",
+        property_label=None,
+        colmap="viridis",
+        n_lon=720,
+        n_lat=360,
+        savefig=False,
+        savefig_name=None,
+        savefolder=None,
+        ax=None,
+        vmin=None,
+        vmax=None,
+        draw_colorbar=True,
+    ):
+        '''
+        Plots a spherical shell map for a given radius and property on the mesh. 
+        If ax is provided, plots on that axis, otherwise creates a new figure and axis. 
+        Supports optional saving of the figure. 
+        Can specify vmin/vmax for color scaling and whether to draw the colorbar.
+        '''
+        import matplotlib.pyplot as plt
+        import numpy as np
+
+        mesh = self.mesh
+
+        # Only single radius supported for colorbar control
+        points = mesh.points
+        mesh_with_radius = mesh.copy()
+        mesh_with_radius.point_data["radius"] = np.linalg.norm(points, axis=1)
+        shell = mesh_with_radius.contour(isosurfaces=[radius_km], scalars="radius")
+        shell_sampled = shell.sample(mesh)
+        pts = shell_sampled.points
+        x = pts[:, 0]
+        y = pts[:, 1]
+        z = pts[:, 2]
+        r = np.linalg.norm(pts, axis=1)
+        lon = np.arctan2(y, x)
+        lat = np.arcsin(np.clip(z / r, -1.0, 1.0))
+        vals = np.asarray(shell_sampled.point_data[property_name])
+        lon_grid = np.linspace(-np.pi, np.pi, n_lon)
+        lat_grid = np.linspace(-np.pi / 2, np.pi / 2, n_lat)
+        Lon, Lat = np.meshgrid(lon_grid, lat_grid)
+        from scipy.interpolate import griddata
+        grid_vals = griddata(
+            (lon, lat),
+            vals,
+            (Lon, Lat),
+            method="linear",
+        )
+        nan_mask = np.isnan(grid_vals)
+        if np.any(nan_mask):
+            grid_vals[nan_mask] = griddata(
+                (lon, lat),
+                vals,
+                (Lon[nan_mask], Lat[nan_mask]),
+                method="nearest",
+            )
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(12, 4))
+        else:
+            fig = ax.get_figure()
+        im = ax.pcolormesh(
+            Lon, Lat, grid_vals, cmap=colmap, shading='auto', vmin=vmin, vmax=vmax
+        )
+        ax.set_xlabel("Longitude (rad)")
+        ax.set_ylabel("Latitude (rad)")
+        ax.set_title(f"{property_label if property_label else property_name} at radius {radius_km:.1f} km")
+        if draw_colorbar:
+            fig.colorbar(im, ax=ax, label=property_label if property_label else property_name)
+        plt.tight_layout()
+        if savefig:
+            name = savefig_name or f"kernel_map_{property_name}_{radius_km}.png"
+            if savefolder:
+                name = savefolder + "/" + name
+            fig.savefig(name, dpi=300)
+        return fig, ax
+
+    def plot_spherical_shell_map_grid(
+        self,
+        model_name,
+        dataset_list,
+        phase,
+        radii,
+        property_name_template="summed_kernel_{phase}_{dataset}",
+        property_label="Summed kernel",
+        title=None,
+        colmap="magma",
+        n_lon=720,
+        n_lat=360,
+        model_display_names={},
+        savepath=None,
+        showfig=True,
+        overall_colorbar=True,
+        axisfontsize=14,
+        titlefontsize=16,
+    ):
+        """
+        Plots a grid of spherical shell maps with datasets as columns and radii as rows.
+        If overall_colorbar is True, all subplots share the same color scale and only one colorbar is drawn.
+        If overall_colorbar is False, each subplot manages its own colorbar and color scale.
+        """
+        import matplotlib.pyplot as plt
+        import numpy as np
+
+        mesh = self.mesh
+
+        # if model_display_names is None:
+        #     model_display_names = {m: m for m in models_list}
+
+        nrows = len(radii)
+        ncols = len(dataset_list)
+        fig, axes = plt.subplots(nrows, ncols, figsize=(4*ncols, 3*nrows), sharex=True, sharey=True)
+        if nrows == 1 and ncols == 1:
+            axes = np.array([[axes]])
+        elif nrows == 1 or ncols == 1:
+            axes = axes.reshape((nrows, ncols))
+
+        # If using overall colorbar, determine global vmin/vmax
+        vmin = vmax = None
+        if overall_colorbar:
+            all_vals = []
+            for dataset in dataset_list:
+                for radius in radii:
+                    prop_name = property_name_template.format(phase=phase, dataset=dataset)
+                    # Extract values for this shell
+                    points = mesh.points
+                    mesh_with_radius = mesh.copy()
+                    mesh_with_radius.point_data["radius"] = np.linalg.norm(points, axis=1)
+                    shell = mesh_with_radius.contour(isosurfaces=[radius], scalars="radius")
+                    shell_sampled = shell.sample(mesh)
+                    vals = np.asarray(shell_sampled.point_data[prop_name])
+                    all_vals.append(vals)
+            all_vals = np.concatenate(all_vals)
+            vmin = np.nanmin(all_vals)
+            vmax = np.nanmax(all_vals)
+
+        ims = []
+        for i, radius in enumerate(radii):
+            for j, dataset in enumerate(dataset_list):
+                ax = axes[i, j]
+                # Only one model/phase per subplot is typical, but loop for generality
+                prop_name = property_name_template.format(phase=phase, dataset=dataset)
+                im = self.get_spherical_shell_map_image(
+                    radius_km=radius,
+                    property_name=prop_name,
+                    property_label=property_label,
+                    colmap=colmap,
+                    n_lon=n_lon,
+                    n_lat=n_lat,
+                    ax=ax,
+                    savefig=False,
+                    vmin=vmin if overall_colorbar else None,
+                    vmax=vmax if overall_colorbar else None,
+                    draw_colorbar=False if overall_colorbar else True,
+                )
+                if overall_colorbar:
+                    ims.append(im[1].collections[0])  # im[1] is ax, .collections[0] is the QuadMesh
+            
+                if j == 0:
+                    y_label = f"Radius: {radius:.0f} km\n"
+                    # if middle row then add Latitude label
+                    if i == nrows // 2:
+                        y_label += f"Latitude (rad)"
+                else:
+                    y_label = ""
+                # if middle column and bottom row then add Longitude label
+                if i == nrows - 1 and j == ncols // 2:
+                    x_label = f"Longitude (rad)"
+                else:
+                    x_label = ""
+                # add title only to top row
+                if i == 0:
+                    title = f"{dataset}"
+                else:
+                    title = ""
+                ax.set_title(title, fontsize=titlefontsize)
+                ax.set_xlabel(x_label, fontsize=axisfontsize)
+                ax.set_ylabel(y_label, fontsize=axisfontsize)
+
+        if overall_colorbar:
+            fig.subplots_adjust(right=0.88)
+            cbar_ax = fig.add_axes([0.9, 0.15, 0.02, 0.7])
+            # Use the first QuadMesh for the colorbar
+            cbar = fig.colorbar(ims[0], cax=cbar_ax, label=property_label)
+            cbar.ax.tick_params(labelsize=14)
+            cbar.set_label(property_label, fontsize=14)
+        fig.suptitle(title if title else f"Spherical Shell Maps - {model_display_names.get(model_name, model_name)} - {phase}", fontsize=titlefontsize)
+        plt.tight_layout(rect=[0, 0, 0.88 if overall_colorbar else 1, 1])
+        if savepath:
+            plt.savefig(savepath)
+        if showfig:
+            plt.show()
+        return fig, axes
+
     def plot_shell_property(self,
                             property_name: str, *,
                             show_shading=True,
